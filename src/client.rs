@@ -1,5 +1,5 @@
 use crate::config::ResolvedConfig;
-use crate::models::{Challenge, CtfdResponse, ScoreboardEntry};
+use crate::models::{Challenge, ChallengeDetail, CtfdResponse, ScoreboardEntry};
 use reqwest::Client as HttpClient;
 
 /// Errors that can occur when interacting with the CTFd API.
@@ -111,5 +111,47 @@ impl CtfdClient {
     /// Fetch the list of visible challenges from the CTFd API.
     pub async fn get_challenges(&self) -> Result<Vec<Challenge>, CtfdError> {
         self.get::<Vec<Challenge>>("/api/v1/challenges").await
+    }
+
+    /// Fetch detailed information for a single challenge.
+    pub async fn get_challenge_detail(
+        &self,
+        challenge_id: u64,
+    ) -> Result<ChallengeDetail, CtfdError> {
+        self.get::<ChallengeDetail>(&format!("/api/v1/challenges/{challenge_id}"))
+            .await
+    }
+
+    /// Download raw bytes from an attachment URL.
+    ///
+    /// If `url` is relative (starts with `/`), it is resolved against the
+    /// configured base URL.  Absolute URLs are used as-is.
+    pub async fn download_attachment(&self, url: &str) -> Result<Vec<u8>, CtfdError> {
+        let resolved_url = if url.starts_with('/') {
+            format!("{}{url}", self.base_url)
+        } else {
+            url.to_string()
+        };
+
+        let response = self
+            .http
+            .get(&resolved_url)
+            .header("Authorization", format!("Token {}", self.api_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if status.is_client_error() || status.is_server_error() {
+            return Err(CtfdError::Api(format!(
+                "Attachment download failed with HTTP {status}"
+            )));
+        }
+
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(CtfdError::Network)
     }
 }

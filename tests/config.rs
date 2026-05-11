@@ -245,7 +245,11 @@ fn global_flags_before_subcommand_download() {
         .arg("test-token")
         .arg("download")
         .assert()
-        .success();
+        .failure()
+        .stderr(
+            predicate::str::contains("Network")
+                .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
+        );
 }
 
 #[test]
@@ -409,7 +413,8 @@ async fn all_subcommands_accept_global_flags() {
                 .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
         );
 
-    // download, submit are still stubs that don't make network calls
+    // download now makes real HTTP calls — the network will fail on localhost:9999
+    // but the config is still accepted (no config error)
     ctfd()
         .arg("--url")
         .arg("http://localhost:9999")
@@ -417,8 +422,13 @@ async fn all_subcommands_accept_global_flags() {
         .arg("test-token")
         .arg("download")
         .assert()
-        .success();
+        .failure()
+        .stderr(
+            predicate::str::contains("Network")
+                .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
+        );
 
+    // submit is still a stub that doesn't make network calls
     ctfd()
         .arg("--url")
         .arg("http://localhost:9999")

@@ -54,6 +54,46 @@ pub struct Challenge {
     pub solved_by_me: bool,
 }
 
+/// Detailed information about a single challenge.
+///
+/// Returned by `GET /api/v1/challenges/{id}`. Contains the full
+/// description, connection info, attachments, tags, and other metadata
+/// needed for the download command.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ChallengeDetail {
+    /// Numeric challenge ID.
+    pub id: u64,
+    /// User-facing challenge name.
+    pub name: String,
+    /// Category (e.g. "Web", "Crypto", "Forensics").
+    pub category: String,
+    /// Point value.
+    pub value: i64,
+    /// Challenge description (markdown).
+    pub description: String,
+    /// Optional connection info string (e.g. `nc host port`).
+    #[serde(default)]
+    pub connection_info: Option<String>,
+    /// Challenge type (e.g. "standard", "dynamic").
+    #[serde(rename = "type", default)]
+    pub challenge_type: Option<String>,
+    /// Visibility state (e.g. "visible", "hidden").
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Whether the authenticated user has solved this challenge.
+    #[serde(rename = "solved_by_me", default)]
+    pub solved_by_me: bool,
+    /// Attachment file URLs (may be relative or absolute).
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
+    /// Challenge tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Maximum number of flag attempts.
+    #[serde(default)]
+    pub max_attempts: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +184,104 @@ mod tests {
         let challenges = resp.data.unwrap();
         assert_eq!(challenges[0].id, 1);
         assert_eq!(challenges[0].name, "Minimal");
+    }
+
+    // --- ChallengeDetail parsing ---
+
+    #[test]
+    fn parse_challenge_detail_full() {
+        let json = r#"{
+            "id": 1,
+            "name": "Baby Login",
+            "category": "Web",
+            "value": 100,
+            "description": "Login as admin.\n\nFind the password.",
+            "connection_info": "nc example.com 1337",
+            "type": "standard",
+            "state": "visible",
+            "solved_by_me": false,
+            "files": ["/files/abc123/handout.zip"],
+            "tags": ["web", "easy"],
+            "max_attempts": 10
+        }"#;
+        let detail: ChallengeDetail = serde_json::from_str(json).expect("should parse");
+        assert_eq!(detail.id, 1);
+        assert_eq!(detail.name, "Baby Login");
+        assert_eq!(detail.category, "Web");
+        assert_eq!(detail.value, 100);
+        assert_eq!(detail.description, "Login as admin.\n\nFind the password.");
+        assert_eq!(
+            detail.connection_info.as_deref(),
+            Some("nc example.com 1337")
+        );
+        assert_eq!(detail.challenge_type.as_deref(), Some("standard"));
+        assert_eq!(detail.state.as_deref(), Some("visible"));
+        assert!(!detail.solved_by_me);
+        assert_eq!(
+            detail.files.as_deref(),
+            Some(&["/files/abc123/handout.zip".to_string()][..])
+        );
+        assert_eq!(
+            detail.tags.as_deref(),
+            Some(&["web".to_string(), "easy".to_string()][..])
+        );
+        assert_eq!(detail.max_attempts, Some(10));
+    }
+
+    #[test]
+    fn parse_challenge_detail_minimal() {
+        // Only required fields.
+        let json = r#"{
+            "id": 2,
+            "name": "RSA 101",
+            "category": "Crypto",
+            "value": 200,
+            "description": "Break RSA"
+        }"#;
+        let detail: ChallengeDetail = serde_json::from_str(json).expect("should parse");
+        assert_eq!(detail.id, 2);
+        assert_eq!(detail.name, "RSA 101");
+        assert_eq!(detail.category, "Crypto");
+        assert_eq!(detail.value, 200);
+        assert_eq!(detail.description, "Break RSA");
+        assert!(detail.connection_info.is_none());
+        assert!(detail.challenge_type.is_none());
+        assert!(detail.state.is_none());
+        assert!(!detail.solved_by_me);
+        assert!(detail.files.is_none());
+        assert!(detail.tags.is_none());
+        assert!(detail.max_attempts.is_none());
+    }
+
+    #[test]
+    fn parse_challenge_detail_with_multiple_files() {
+        let json = r#"{
+            "id": 3,
+            "name": "Multi File",
+            "category": "Forensics",
+            "value": 300,
+            "description": "Analyze",
+            "files": ["/files/dump.pcap", "https://cdn.example.com/hint.txt"]
+        }"#;
+        let detail: ChallengeDetail = serde_json::from_str(json).expect("should parse");
+        let files = detail.files.unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], "/files/dump.pcap");
+        assert_eq!(files[1], "https://cdn.example.com/hint.txt");
+    }
+
+    #[test]
+    fn parse_challenge_detail_empty_files_array() {
+        let json = r#"{
+            "id": 4,
+            "name": "No Files",
+            "category": "Misc",
+            "value": 50,
+            "description": "No attachments",
+            "files": []
+        }"#;
+        let detail: ChallengeDetail = serde_json::from_str(json).expect("should parse");
+        let files = detail.files.unwrap();
+        assert!(files.is_empty());
     }
 }

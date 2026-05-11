@@ -1,6 +1,7 @@
 mod client;
 mod commands;
 mod config;
+mod fs_util;
 mod models;
 
 use clap::Parser;
