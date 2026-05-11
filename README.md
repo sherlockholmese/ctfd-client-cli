@@ -1,6 +1,6 @@
 # CTFd Client CLI
 
-`ctfd` is a Rust command-line client for interacting with a CTFd instance using API token authentication. It can show the leaderboard, list challenge status, download visible challenges, and submit flags.
+`ctfd-client` is a Rust command-line client for interacting with a CTFd instance using API token authentication. It can show the leaderboard, list challenge status, download visible challenges, and submit flags.
 
 ## Install / Build
 
@@ -34,7 +34,7 @@ export CTFD_TOKEN="your-api-token"
 Equivalent flags are available on every command:
 
 ```sh
-ctfd --url https://ctfd.example.com --token your-api-token status
+ctfd-client --url https://ctfd.example.com --token your-api-token status
 ```
 
 Flags override environment variables. Tokens are used only for API authentication and should not be printed or logged.
@@ -46,8 +46,8 @@ Flags override environment variables. Tokens are used only for API authenticatio
 Display the CTFd scoreboard:
 
 ```sh
-ctfd leaderboard
-ctfd --url https://ctfd.example.com --token "$CTFD_TOKEN" leaderboard
+ctfd-client leaderboard
+ctfd-client --url https://ctfd.example.com --token "$CTFD_TOKEN" leaderboard
 ```
 
 ### Status
@@ -55,7 +55,7 @@ ctfd --url https://ctfd.example.com --token "$CTFD_TOKEN" leaderboard
 Show visible challenges grouped by category, with solved state:
 
 ```sh
-ctfd status
+ctfd-client status
 ```
 
 ### Download
@@ -63,7 +63,7 @@ ctfd status
 Download all visible challenges into the current directory:
 
 ```sh
-ctfd download
+ctfd-client download
 ```
 
 For each challenge, the CLI creates a sanitized path:
@@ -82,7 +82,7 @@ For each challenge, the CLI creates a sanitized path:
 Submit a flag using the numeric CTFd challenge ID:
 
 ```sh
-ctfd submit 123 'flag{example}'
+ctfd-client submit 123 'flag{example}'
 ```
 
 Correct and already-solved submissions exit successfully. Incorrect submissions exit non-zero.

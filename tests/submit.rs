@@ -3,9 +3,9 @@ use predicates::prelude::*;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Get a command for the ctfd binary.
+/// Get a command for the ctfd-client binary.
 fn ctfd() -> Command {
-    Command::cargo_bin("ctfd").expect("ctfd binary should exist")
+    Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist")
 }
 
 /// Build a mock submit response for a given status string.
@@ -164,7 +164,7 @@ fn challenge_argument_required() {
 
 #[test]
 fn single_arg_submit_fails_outside_challenge_directory() {
-    // `ctfd submit 1` with one arg enters auto-detect mode (flag="1").
+    // `ctfd-client submit 1` with one arg enters auto-detect mode (flag="1").
     // Since we are not in a challenge directory and have no metadata.json,
     // it attempts to fetch the challenge list and match by path.
     // With an unreachable server, the error reports the fetch failure.

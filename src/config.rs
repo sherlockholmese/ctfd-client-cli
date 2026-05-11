@@ -1,10 +1,10 @@
 use clap::{Args, Parser, Subcommand};
 
-/// CTFd CLI — interact with a CTFd instance from the terminal.
+/// CTFd client CLI — interact with a CTFd instance from the terminal.
 #[derive(Parser, Debug)]
 #[command(
-    name = "ctfd",
-    about = "Interact with a CTFd instance from the terminal.",
+    name = "ctfd-client",
+    about = "CTFd player/client CLI — interact with a CTFd instance from the terminal.",
     long_about = None,
     version
 )]
@@ -50,8 +50,8 @@ pub enum Commands {
     /// Submit a flag for a challenge
     ///
     /// Supports two forms:
-    /// - Explicit: `ctfd submit <challenge-id> <flag>`
-    /// - Auto-detect: `ctfd submit <flag>` (run from a downloaded
+    /// - Explicit: `ctfd-client submit <challenge-id> <flag>`
+    /// - Auto-detect: `ctfd-client submit <flag>` (run from a downloaded
     ///   challenge directory; challenge ID is detected from
     ///   metadata.json or category/challenge-name path).
     Submit {
@@ -231,7 +231,7 @@ impl GlobalArgs {
         })
     }
 
-    /// Resolve configuration for auto-submit mode (`ctfd submit <flag>`).
+    /// Resolve configuration for auto-submit mode (`ctfd-client submit <flag>`).
     ///
     /// This extends the normal resolution by also checking a `ctfd.toml`
     /// in the inferred challenge workspace root (exactly two directories

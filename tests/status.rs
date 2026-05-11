@@ -3,9 +3,9 @@ use predicates::prelude::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Get a command for the ctfd binary.
+/// Get a command for the ctfd-client binary.
 fn ctfd() -> Command {
-    Command::cargo_bin("ctfd").expect("ctfd binary should exist")
+    Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist")
 }
 
 /// Return a standard multi-category challenge fixture JSON.
