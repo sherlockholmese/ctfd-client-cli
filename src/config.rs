@@ -48,11 +48,19 @@ pub enum Commands {
     /// Download challenges to the current directory
     Download,
     /// Submit a flag for a challenge
+    ///
+    /// Supports two forms:
+    /// - Explicit: `ctfd submit <challenge-id> <flag>`
+    /// - Auto-detect: `ctfd submit <flag>` (run from a downloaded
+    ///   challenge directory; challenge ID is detected from
+    ///   metadata.json or category/challenge-name path).
     Submit {
-        /// Numeric CTFd challenge ID
-        challenge_id: String,
-        /// Flag value to submit
-        flag: String,
+        /// First positional argument: numeric challenge ID in explicit
+        /// mode, or the flag value in auto-detect mode.
+        arg1: String,
+        /// Second positional argument (optional): the flag value when
+        /// an explicit challenge ID is provided as the first argument.
+        arg2: Option<String>,
     },
 }
 
@@ -215,6 +223,76 @@ impl GlobalArgs {
         };
 
         // Normalize trailing slash: strip any trailing slashes
+        let base_url = base_url.trim_end_matches('/').to_string();
+
+        Ok(ResolvedConfig {
+            base_url,
+            api_token,
+        })
+    }
+
+    /// Resolve configuration for auto-submit mode (`ctfd submit <flag>`).
+    ///
+    /// This extends the normal resolution by also checking a `ctfd.toml`
+    /// in the inferred challenge workspace root (exactly two directories
+    /// above the current directory) when flags, environment, and
+    /// current-directory `ctfd.toml` are all insufficient.
+    ///
+    /// It does **not** search arbitrary ancestors — only the current
+    /// directory and the challenge root are considered.
+    pub fn resolve_for_auto_submit(&self) -> Result<ResolvedConfig, ConfigError> {
+        // First try the normal resolution chain (flags > env > ./ctfd.toml).
+        match self.resolve() {
+            Ok(cfg) => return Ok(cfg),
+            Err(ConfigError::MissingUrl) | Err(ConfigError::MissingToken) => {
+                // One or both values are still missing — try the challenge
+                // root ctfd.toml (../../ctfd.toml) as a final fallback.
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Re-compute raw flag/env values (same as resolve()).
+        let raw_url: Option<String> = match &self.url {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Err(ConfigError::EmptyUrl);
+                }
+                Some(trimmed.to_string())
+            }
+            None => None,
+        };
+
+        let raw_token: Option<String> = match &self.token {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Err(ConfigError::EmptyToken);
+                }
+                Some(trimmed.to_string())
+            }
+            None => None,
+        };
+
+        // Read current-directory ctfd.toml for any partial values already
+        // resolved.
+        let (cur_url, cur_token) = read_ctfd_toml_at(std::path::Path::new("ctfd.toml"))?;
+
+        // Try the challenge-root ctfd.toml: ../../ctfd.toml
+        let root_path = std::path::Path::new("../../ctfd.toml");
+        let (root_url, root_token) = read_ctfd_toml_at(root_path)?;
+
+        // Merge: flags/env first, then current-dir toml, then root toml.
+        let base_url = match raw_url.or(cur_url).or(root_url) {
+            Some(u) => u,
+            None => return Err(ConfigError::MissingUrl),
+        };
+
+        let api_token = match raw_token.or(cur_token).or(root_token) {
+            Some(t) => t,
+            None => return Err(ConfigError::MissingToken),
+        };
+
         let base_url = base_url.trim_end_matches('/').to_string();
 
         Ok(ResolvedConfig {

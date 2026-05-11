@@ -14,8 +14,8 @@ pub async fn run_command(
         crate::config::Commands::Leaderboard => leaderboard::run(config).await,
         crate::config::Commands::Status => status::run(config).await,
         crate::config::Commands::Download => download::run(config).await,
-        crate::config::Commands::Submit { challenge_id, flag } => {
-            submit::run(config, &challenge_id, &flag).await
+        crate::config::Commands::Submit { arg1, arg2 } => {
+            submit::run(config, &arg1, arg2.as_deref()).await
         }
     }
 }

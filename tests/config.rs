@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Get a command for the ctfd binary.
@@ -1245,4 +1245,286 @@ async fn toml_config_full_precedence_chain() {
         .assert()
         .success()
         .stdout(predicate::str::contains("FullPrecedence"));
+}
+
+// ============================================================================
+// Auto-submit config resolution (VAL-CONFIG-010)
+// ============================================================================
+
+/// Mount a submit mock that expects a specific auto-detected challenge ID.
+async fn mount_auto_submit_mock(
+    server: &MockServer,
+    expected_challenge_id: u64,
+    expected_flag: &str,
+    expected_token: &str,
+    expected_count: u64,
+) {
+    // Mount challenge list for path matching
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .and(header("Authorization", format!("Token {expected_token}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": expected_challenge_id, "name": "Baby Login", "category": "Web", "value": 100, "solved_by_me": false}
+            ]
+        })))
+        .mount(server)
+        .await;
+
+    // Mount submit mock
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .and(header("Authorization", format!("Token {expected_token}")))
+        .and(body_json(serde_json::json!({
+            "challenge_id": expected_challenge_id,
+            "submission": expected_flag,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": { "status": "correct", "message": "Correct!" }
+        })))
+        .expect(expected_count)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn auto_submit_current_dir_toml_overrides_challenge_root_toml() {
+    // Current-directory ctfd.toml should take precedence over
+    // challenge-root ctfd.toml (../../ctfd.toml from challenge dir).
+    let server = MockServer::start().await;
+
+    mount_auto_submit_mock(&server, 1, "flag{test}", "current-dir-token", 1).await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Challenge-root ctfd.toml (different token)
+    let root_toml = work_dir.path().join("ctfd.toml");
+    std::fs::write(
+        &root_toml,
+        format!("url = \"{}\"\ntoken = \"root-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    // Current-directory ctfd.toml (in challenge dir)
+    let current_toml = challenge_dir.join("ctfd.toml");
+    std::fs::write(
+        &current_toml,
+        format!(
+            "url = \"{}\"\ntoken = \"current-dir-token\"\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("submit")
+        .arg("flag{test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(&challenge_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn auto_submit_uses_challenge_root_toml_when_current_dir_absent() {
+    // When only the challenge-root ctfd.toml exists (no current-dir
+    // ctfd.toml), auto-submit uses the root toml.
+    let server = MockServer::start().await;
+
+    mount_auto_submit_mock(&server, 1, "flag{test}", "root-token", 1).await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Only challenge-root ctfd.toml
+    let root_toml = work_dir.path().join("ctfd.toml");
+    std::fs::write(
+        &root_toml,
+        format!("url = \"{}\"\ntoken = \"root-token\"\n", server.uri()),
+    )
+    .unwrap();
+    // No ctfd.toml in challenge dir
+
+    ctfd()
+        .arg("submit")
+        .arg("flag{test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(&challenge_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn auto_submit_ignores_toml_above_challenge_root() {
+    // A ctfd.toml three directories above the challenge dir should be
+    // ignored.  Only current dir and challenge root (../../) are checked.
+    let server = MockServer::start().await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Put ctfd.toml in the challenge dir's grandparent (../../../ctfd.toml
+    // relative to the challenge dir → the tempdir's parent).
+    // We can't write to the tempdir's parent, so instead we create a
+    // nested structure and put the toml at a level above the root.
+    // Structure:
+    //   outer/              ← ctfd.toml here (three levels above challenge)
+    //     work_dir/         ← challenge root
+    //       Web/            ← category
+    //         Baby Login/   ← challenge dir
+    //
+    // Auto-submit should NOT use outer/ctfd.toml.
+    let outer = tempfile::tempdir().unwrap();
+    let work_dir = tempfile::tempdir_in(outer.path()).unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // ctfd.toml at outer/ level (grandparent of challenge root)
+    std::fs::write(
+        outer.path().join("ctfd.toml"),
+        format!("url = \"{}\"\ntoken = \"outer-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    // No ctfd.toml in current dir or challenge root
+
+    ctfd()
+        .arg("submit")
+        .arg("flag{test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(&challenge_dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("URL").or(predicate::str::contains("url")));
+}
+
+#[tokio::test]
+async fn auto_submit_flag_overrides_toml_files() {
+    // Flags should override both current-dir and challenge-root toml.
+    let server = MockServer::start().await;
+
+    mount_auto_submit_mock(&server, 1, "flag{test}", "flag-token", 1).await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Both toml files with different tokens
+    let root_toml = work_dir.path().join("ctfd.toml");
+    std::fs::write(
+        &root_toml,
+        "url = \"http://toml-root:9999\"\ntoken = \"root-token\"\n",
+    )
+    .unwrap();
+
+    let current_toml = challenge_dir.join("ctfd.toml");
+    std::fs::write(
+        &current_toml,
+        "url = \"http://toml-current:9999\"\ntoken = \"current-token\"\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("flag-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(&challenge_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn auto_submit_env_overrides_toml_files() {
+    // Environment should override both current-dir and challenge-root toml.
+    let server = MockServer::start().await;
+
+    mount_auto_submit_mock(&server, 1, "flag{test}", "env-token", 1).await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Both toml files with different tokens
+    let root_toml = work_dir.path().join("ctfd.toml");
+    std::fs::write(
+        &root_toml,
+        "url = \"http://toml-root:9999\"\ntoken = \"root-token\"\n",
+    )
+    .unwrap();
+
+    let current_toml = challenge_dir.join("ctfd.toml");
+    std::fs::write(
+        &current_toml,
+        "url = \"http://toml-current:9999\"\ntoken = \"current-token\"\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("submit")
+        .arg("flag{test}")
+        .env("CTFD_URL", server.uri())
+        .env("CTFD_TOKEN", "env-token")
+        .current_dir(&challenge_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn auto_submit_toml_token_not_leaked_on_config_error() {
+    // Token from challenge-root toml must not appear in error output.
+    let _server = MockServer::start().await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let challenge_dir = work_dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Challenge-root toml has token but NO url
+    let root_toml = work_dir.path().join("ctfd.toml");
+    std::fs::write(&root_toml, "token = \"secret-root-token-xyz\"\n").unwrap();
+
+    // No current-dir toml
+
+    let output = ctfd()
+        .arg("submit")
+        .arg("flag{test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(&challenge_dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stderr.contains("secret-root-token-xyz"),
+        "stderr should not contain token: {stderr}"
+    );
+    assert!(
+        !stdout.contains("secret-root-token-xyz"),
+        "stdout should not contain token"
+    );
+    // Error should mention missing URL
+    assert!(
+        stderr.to_lowercase().contains("url"),
+        "Error should mention URL: {stderr}"
+    );
 }

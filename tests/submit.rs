@@ -158,11 +158,16 @@ fn challenge_argument_required() {
 }
 
 // ============================================================================
-// VAL-SUBMIT-005: Flag argument is required
+// VAL-SUBMIT-005: Single-arg submit in auto-detect mode fails outside
+//                  challenge directory (no metadata, no path match)
 // ============================================================================
 
 #[test]
-fn flag_argument_required() {
+fn single_arg_submit_fails_outside_challenge_directory() {
+    // `ctfd submit 1` with one arg enters auto-detect mode (flag="1").
+    // Since we are not in a challenge directory and have no metadata.json,
+    // it attempts to fetch the challenge list and match by path.
+    // With an unreachable server, the error reports the fetch failure.
     ctfd()
         .arg("--url")
         .arg("http://localhost:9999")
@@ -173,9 +178,9 @@ fn flag_argument_required() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("required")
-                .or(predicate::str::contains("flag"))
-                .or(predicate::str::contains("FLAG")),
+            predicate::str::contains("Failed to fetch challenge list")
+                .or(predicate::str::contains("Cannot auto-detect"))
+                .or(predicate::str::contains("challenge")),
         );
 }
 
@@ -651,4 +656,458 @@ fn token_not_leaked_in_argument_errors() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains(token));
     assert!(!stderr.contains(token));
+}
+
+// ============================================================================
+// Auto-detect submit tests (VAL-SUBMIT-020 through VAL-SUBMIT-027)
+// ============================================================================
+
+/// Mount a mock for the challenge list endpoint.
+async fn mount_challenge_list_mock(
+    server: &MockServer,
+    challenges: serde_json::Value,
+    token: &str,
+    expected_count: u64,
+) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .and(header("Authorization", format!("Token {token}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": challenges,
+        })))
+        .expect(expected_count)
+        .mount(server)
+        .await;
+}
+
+// ============================================================================
+// VAL-SUBMIT-020: Auto-submit reads metadata challenge ID
+// ============================================================================
+
+#[tokio::test]
+async fn auto_submit_reads_metadata_challenge_id() {
+    let server = MockServer::start().await;
+
+    mount_submit_mock(
+        &server,
+        42,
+        "flag{from-metadata}",
+        "test-token",
+        submit_response("correct", "Correct!"),
+        1,
+    )
+    .await;
+
+    // Create a temp challenge directory with metadata.json
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Write metadata.json with a known challenge ID
+    let metadata = serde_json::json!({
+        "id": 42,
+        "name": "Baby Login",
+        "category": "Web",
+        "value": 100,
+        "description": "Login as admin",
+        "solved_by_me": false
+    });
+    std::fs::write(
+        challenge_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&metadata).unwrap(),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{from-metadata}")
+        .current_dir(&challenge_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+// ============================================================================
+// VAL-SUBMIT-021: Auto-submit falls back to path match
+// ============================================================================
+
+#[tokio::test]
+async fn auto_submit_falls_back_to_path_match() {
+    let server = MockServer::start().await;
+
+    // Mount challenge list with exactly one matching challenge
+    mount_challenge_list_mock(
+        &server,
+        serde_json::json!([
+            {"id": 10, "name": "Baby Login", "category": "Web", "value": 100, "solved_by_me": false},
+            {"id": 20, "name": "RSA 101", "category": "Crypto", "value": 200, "solved_by_me": false},
+        ]),
+        "test-token",
+        1,
+    )
+    .await;
+
+    // Mount submit mock for challenge ID 10 (the Web/Baby Login match)
+    mount_submit_mock(
+        &server,
+        10,
+        "flag{path-match}",
+        "test-token",
+        submit_response("correct", "Correct!"),
+        1,
+    )
+    .await;
+
+    // Create a challenge directory WITHOUT metadata.json
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+    // No metadata.json — forces path fallback
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{path-match}")
+        .current_dir(&challenge_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+// ============================================================================
+// VAL-SUBMIT-022: Auto-submit reports outside challenge directory
+// ============================================================================
+
+#[tokio::test]
+async fn auto_submit_reports_outside_challenge_directory() {
+    let server = MockServer::start().await;
+
+    // Mount challenge list with no matching challenges for the current path
+    mount_challenge_list_mock(
+        &server,
+        serde_json::json!([
+            {"id": 1, "name": "Other", "category": "Misc", "value": 50, "solved_by_me": false},
+        ]),
+        "test-token",
+        1,
+    )
+    .await;
+
+    // Run from a directory that doesn't match any challenge
+    let dir = tempfile::tempdir().unwrap();
+    // The dir name will be random, so it won't match any challenge
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Cannot auto-detect"));
+}
+
+// ============================================================================
+// VAL-SUBMIT-023: Auto-submit reports missing path match
+// ============================================================================
+
+#[tokio::test]
+async fn auto_submit_reports_missing_path_match() {
+    let server = MockServer::start().await;
+
+    // Challenge list does NOT include a "Web/Baby Login" challenge
+    mount_challenge_list_mock(
+        &server,
+        serde_json::json!([
+            {"id": 1, "name": "Other Challenge", "category": "Misc", "value": 50, "solved_by_me": false},
+        ]),
+        "test-token",
+        1,
+    )
+    .await;
+
+    // Create a Web/Baby Login directory without metadata.json
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(&challenge_dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no challenge matches"));
+}
+
+// ============================================================================
+// VAL-SUBMIT-024: Auto-submit reports ambiguous path match
+// ============================================================================
+
+#[tokio::test]
+async fn auto_submit_reports_ambiguous_path_match() {
+    let server = MockServer::start().await;
+
+    // Challenge list contains DUPLICATE category/name entries with different IDs
+    mount_challenge_list_mock(
+        &server,
+        serde_json::json!([
+            {"id": 10, "name": "Baby Login", "category": "Web", "value": 100, "solved_by_me": false},
+            {"id": 20, "name": "Baby Login", "category": "Web", "value": 200, "solved_by_me": false},
+        ]),
+        "test-token",
+        1,
+    )
+    .await;
+
+    // Create a Web/Baby Login directory without metadata.json
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(&challenge_dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("multiple challenges match"));
+}
+
+// ============================================================================
+// VAL-SUBMIT-025: Auto-submit reports malformed metadata
+// ============================================================================
+
+#[test]
+fn auto_submit_reports_malformed_metadata() {
+    // Create a challenge directory with malformed metadata.json
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    // Write broken JSON as metadata
+    std::fs::write(
+        challenge_dir.join("metadata.json"),
+        "this is not valid json {{{",
+    )
+    .unwrap();
+
+    // The command should fail before network (no wiremock needed)
+    ctfd()
+        .arg("--url")
+        .arg("http://localhost:9999")
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(&challenge_dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("malformed").or(predicate::str::contains("metadata")));
+}
+
+#[test]
+fn auto_submit_reports_metadata_missing_id() {
+    // Create a challenge directory with metadata.json missing the id field
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    let metadata = serde_json::json!({
+        "name": "Baby Login",
+        "category": "Web"
+    });
+    std::fs::write(
+        challenge_dir.join("metadata.json"),
+        serde_json::to_string(&metadata).unwrap(),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg("http://localhost:9999")
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(&challenge_dir)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("malformed").or(predicate::str::contains("metadata")));
+}
+
+// ============================================================================
+// VAL-SUBMIT-026: Auto-submit does not leak tokens
+// ============================================================================
+
+#[test]
+fn auto_submit_token_not_leaked_malformed_metadata() {
+    let token = "auto-leak-token-001";
+
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+    std::fs::write(challenge_dir.join("metadata.json"), "{{{ broken json {{{").unwrap();
+
+    let output = ctfd()
+        .arg("--url")
+        .arg("http://localhost:9999")
+        .arg("--token")
+        .arg(token)
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(&challenge_dir)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains(token));
+    assert!(!stderr.contains(token));
+}
+
+#[test]
+fn auto_submit_token_not_leaked_outside_directory() {
+    let token = "auto-leak-token-002";
+
+    let output = ctfd()
+        .arg("--url")
+        .arg("http://localhost:9999")
+        .arg("--token")
+        .arg(token)
+        .arg("submit")
+        .arg("flag{test}")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains(token));
+    assert!(!stderr.contains(token));
+}
+
+#[tokio::test]
+async fn auto_submit_token_not_leaked_on_network_error() {
+    let token = "auto-leak-token-003";
+
+    let dir = tempfile::tempdir().unwrap();
+    let challenge_dir = dir.path().join("Web").join("Baby Login");
+    std::fs::create_dir_all(&challenge_dir).unwrap();
+
+    let output = ctfd()
+        .arg("--url")
+        .arg("http://localhost:9999")
+        .arg("--token")
+        .arg(token)
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(&challenge_dir)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains(token));
+    assert!(!stderr.contains(token));
+}
+
+// ============================================================================
+// VAL-SUBMIT-027: Explicit challenge ID submit remains supported
+// ============================================================================
+
+#[tokio::test]
+async fn explicit_submit_still_works_without_auto_detect() {
+    let server = MockServer::start().await;
+
+    mount_submit_mock(
+        &server,
+        99,
+        "flag{explicit}",
+        "test-token",
+        submit_response("correct", "Correct!"),
+        1,
+    )
+    .await;
+
+    // Run from a regular directory — explicit submit should NOT try
+    // auto-detection. With 2 args, it goes straight to explicit mode.
+    let dir = tempfile::tempdir().unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("99")
+        .arg("flag{explicit}")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+// ============================================================================
+// Additional: Auto-submit with metadata.json present but in non-challenge dir
+// ============================================================================
+
+#[test]
+fn auto_submit_with_metadata_in_non_challenge_dir_still_works() {
+    // If metadata.json exists in the current directory, it should be used
+    // regardless of whether the path structure is category/challenge-name.
+    // This test just verifies metadata is preferred over path fallback.
+    let dir = tempfile::tempdir().unwrap();
+
+    let metadata = serde_json::json!({
+        "id": 77,
+        "name": "Some Challenge",
+        "category": "Misc",
+        "value": 50,
+        "description": "Test",
+        "solved_by_me": false
+    });
+    std::fs::write(
+        dir.path().join("metadata.json"),
+        serde_json::to_string_pretty(&metadata).unwrap(),
+    )
+    .unwrap();
+
+    // With no server, it will fail on the network call, but the metadata
+    // should have been read successfully (no metadata error).
+    let output = ctfd()
+        .arg("--url")
+        .arg("http://localhost:9999")
+        .arg("--token")
+        .arg("test-token")
+        .arg("submit")
+        .arg("flag{test}")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should fail with a network/submit error, NOT a metadata error
+    assert!(
+        !stderr.contains("metadata"),
+        "Should not report metadata error when metadata is valid: {stderr}"
+    );
 }
