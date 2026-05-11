@@ -1,5 +1,7 @@
+mod client;
 mod commands;
 mod config;
+mod models;
 
 use clap::Parser;
 use config::Cli;
@@ -17,8 +19,8 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Dispatch to the appropriate command handler
-    commands::run_command(resolved, cli.command)?;
+    // Dispatch to the appropriate command handler (async)
+    commands::run_command(resolved, cli.command).await?;
 
     Ok(())
 }

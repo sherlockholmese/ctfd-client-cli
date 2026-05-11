@@ -1,9 +1,27 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Get a command for the ctfd binary.
 fn ctfd() -> Command {
     Command::cargo_bin("ctfd").expect("ctfd binary should exist")
+}
+
+/// Start a wiremock server that serves a valid leaderboard response.
+async fn start_leaderboard_mock() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"pos": 1, "name": "Test Team", "score": 5000}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    server
 }
 
 // ============================================================================
@@ -189,11 +207,12 @@ fn empty_token_env_is_rejected() {
 // VAL-CROSS-013: Global flag placement is consistent
 // ============================================================================
 
-#[test]
-fn global_flags_before_subcommand_leaderboard() {
+#[tokio::test]
+async fn global_flags_before_subcommand_leaderboard() {
+    let server = start_leaderboard_mock().await;
     ctfd()
         .arg("--url")
-        .arg("http://localhost:9999")
+        .arg(server.uri())
         .arg("--token")
         .arg("test-token")
         .arg("leaderboard")
@@ -243,11 +262,12 @@ fn global_flags_before_subcommand_submit() {
 // VAL-CROSS-014: stdout/stderr separation
 // ============================================================================
 
-#[test]
-fn successful_command_prints_to_stdout_not_stderr() {
+#[tokio::test]
+async fn successful_command_prints_to_stdout_not_stderr() {
+    let server = start_leaderboard_mock().await;
     let output = ctfd()
         .arg("--url")
-        .arg("http://localhost:9999")
+        .arg(server.uri())
         .arg("--token")
         .arg("test-token")
         .arg("leaderboard")
@@ -255,7 +275,6 @@ fn successful_command_prints_to_stdout_not_stderr() {
         .expect("ctfd should run");
 
     assert!(output.status.success());
-    // stdout should have content (the stub prints something), stderr should be empty
     assert!(!output.stdout.is_empty(), "stdout should have output");
     assert!(
         output.stderr.is_empty(),
@@ -306,11 +325,12 @@ fn missing_config_error_does_not_leak_token_in_env() {
 // VAL-CONFIG-001: Supported configuration sources are explicit
 // ============================================================================
 
-#[test]
-fn flags_provide_config() {
+#[tokio::test]
+async fn flags_provide_config() {
+    let server = start_leaderboard_mock().await;
     ctfd()
         .arg("--url")
-        .arg("http://localhost:9999")
+        .arg(server.uri())
         .arg("--token")
         .arg("test-token")
         .arg("leaderboard")
@@ -320,11 +340,12 @@ fn flags_provide_config() {
         .success();
 }
 
-#[test]
-fn env_vars_provide_config() {
+#[tokio::test]
+async fn env_vars_provide_config() {
+    let server = start_leaderboard_mock().await;
     ctfd()
         .arg("leaderboard")
-        .env("CTFD_URL", "http://localhost:9999")
+        .env("CTFD_URL", server.uri())
         .env("CTFD_TOKEN", "test-token")
         .assert()
         .success();
@@ -334,13 +355,13 @@ fn env_vars_provide_config() {
 // VAL-CONFIG-002: CLI flags override environment variables
 // ============================================================================
 
-#[test]
-fn flag_url_overrides_env_url() {
-    // We test this by checking that with both flag and env, the command succeeds.
-    // The unit tests verify the actual resolution precedence.
+#[tokio::test]
+async fn flag_url_overrides_env_url() {
+    let flag_server = start_leaderboard_mock().await;
+    // flag_server is the one the flag URL points to, so it should be used.
     ctfd()
         .arg("--url")
-        .arg("http://flag-host:9999")
+        .arg(flag_server.uri())
         .arg("--token")
         .arg("flag-token")
         .arg("leaderboard")
@@ -354,17 +375,22 @@ fn flag_url_overrides_env_url() {
 // VAL-CROSS-001: Shared global configuration is accepted by every subcommand
 // ============================================================================
 
-#[test]
-fn all_subcommands_accept_global_flags() {
+#[tokio::test]
+async fn all_subcommands_accept_global_flags() {
+    let server = start_leaderboard_mock().await;
+    let url = server.uri();
+
+    // leaderboard needs the mock server
     ctfd()
         .arg("--url")
-        .arg("http://localhost:9999")
+        .arg(&url)
         .arg("--token")
         .arg("test-token")
         .arg("leaderboard")
         .assert()
         .success();
 
+    // status, download, submit are stubs that don't make network calls
     ctfd()
         .arg("--url")
         .arg("http://localhost:9999")
@@ -399,12 +425,15 @@ fn all_subcommands_accept_global_flags() {
 // VAL-CROSS-002: Environment configuration matches flag configuration behavior
 // ============================================================================
 
-#[test]
-fn env_and_flag_config_produce_same_acceptance() {
+#[tokio::test]
+async fn env_and_flag_config_produce_same_acceptance() {
+    let server = start_leaderboard_mock().await;
+    let url = server.uri();
+
     // With flags
     ctfd()
         .arg("--url")
-        .arg("http://localhost:9999")
+        .arg(&url)
         .arg("--token")
         .arg("test-token")
         .arg("leaderboard")
@@ -414,7 +443,7 @@ fn env_and_flag_config_produce_same_acceptance() {
     // With env
     ctfd()
         .arg("leaderboard")
-        .env("CTFD_URL", "http://localhost:9999")
+        .env("CTFD_URL", &url)
         .env("CTFD_TOKEN", "test-token")
         .assert()
         .success();

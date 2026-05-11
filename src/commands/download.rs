@@ -1,6 +1,6 @@
 use crate::config::ResolvedConfig;
 
-pub fn run(config: ResolvedConfig) -> anyhow::Result<()> {
+pub async fn run(config: ResolvedConfig) -> anyhow::Result<()> {
     println!(
         "download: would fetch from {} (token present: {})",
         config.base_url,
