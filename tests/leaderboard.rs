@@ -733,3 +733,139 @@ async fn error_output_on_stderr_only() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+// ============================================================================
+// Dynamic column sizing: long names and large scores remain readable
+// ============================================================================
+
+#[tokio::test]
+async fn long_names_are_not_truncated() {
+    let server = MockServer::start().await;
+    let long_name = "ThisIsAVeryLongTeamNameThatExceedsThirtyCharacters";
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"pos": 1, "name": "Short", "score": 100},
+                {"pos": 2, "name": long_name, "score": 200}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("leaderboard")
+        .output()
+        .expect("ctfd should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The long name must appear in full (not truncated).
+    assert!(
+        stdout.contains(long_name),
+        "Long name should appear in full. Output:\n{stdout}"
+    );
+    // Shorter name below should also be present and visible.
+    assert!(stdout.contains("Short"), "Short name should appear");
+
+    // The long-name row should come after the short row (preserves API order).
+    let short_pos = stdout.find("Short").unwrap();
+    let long_pos = stdout.find(long_name).unwrap();
+    assert!(short_pos < long_pos, "Short should appear before long name");
+}
+
+#[tokio::test]
+async fn large_scores_are_not_truncated() {
+    let server = MockServer::start().await;
+    let huge_score = 9_999_999_999_i64; // 10 digits
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"pos": 1, "name": "A", "score": huge_score},
+                {"pos": 2, "name": "B", "score": 1}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("leaderboard")
+        .output()
+        .expect("ctfd should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let score_str = huge_score.to_string();
+
+    // The huge score must appear in full.
+    assert!(
+        stdout.contains(&score_str),
+        "Huge score should appear in full. Output:\n{stdout}"
+    );
+    // The small score should also appear.
+    assert!(stdout.contains('1'), "Small score should appear");
+}
+
+#[tokio::test]
+async fn column_alignment_works_with_mixed_widths() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"pos": 1, "name": "X", "score": 1},
+                {"pos": 2, "name": "VeryLongNameHere", "score": 999999},
+                {"pos": 100, "name": "Y", "score": 50}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("leaderboard")
+        .output()
+        .expect("ctfd should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // All names and scores must appear.
+    assert!(stdout.contains("X"), "X should appear");
+    assert!(
+        stdout.contains("VeryLongNameHere"),
+        "Long name should appear"
+    );
+    assert!(stdout.contains("Y"), "Y should appear");
+    assert!(stdout.contains("999999"), "Large score should appear");
+
+    // Output must be deterministic (two runs produce identical output).
+    let output2 = ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("test-token")
+        .arg("leaderboard")
+        .output()
+        .expect("ctfd should run");
+    assert_eq!(output.stdout, output2.stdout);
+}

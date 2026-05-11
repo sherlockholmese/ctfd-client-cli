@@ -1,5 +1,4 @@
 use clap::{Args, Parser, Subcommand};
-use std::env;
 
 /// CTFd CLI — interact with a CTFd instance from the terminal.
 #[derive(Parser, Debug)]
@@ -79,53 +78,35 @@ impl GlobalArgs {
     /// Resolve configuration from CLI flags and environment variables.
     ///
     /// Precedence: CLI flags override environment variables.
-    /// Empty values are treated as missing.
-    /// URL trailing slashes are normalized (stripped).
+    /// Clap's `env` attribute merges environment values into the flag fields
+    /// when the flag is not provided, so we only need to inspect `self.url`
+    /// and `self.token`.  Empty values (whitespace-only) are treated as
+    /// missing.  URL trailing slashes are normalized (stripped).
     pub fn resolve(&self) -> Result<ResolvedConfig, ConfigError> {
-        // Resolve URL: flag takes precedence, then env var
+        // Resolve URL: clap already merged flag + env, so inspect the field.
         let raw_url = match &self.url {
-            Some(flag_val) => {
-                if flag_val.trim().is_empty() {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
                     return Err(ConfigError::EmptyUrl);
                 }
-                Some(flag_val.clone())
+                Some(trimmed.to_string())
             }
-            None => {
-                // Clap already merges env vars if we use `env = "..."`
-                // But we need to check if the env var was actually set when flag isn't given.
-                // Since we have env on the arg, it will be populated from env if flag not provided.
-                // So we check the env var directly for our "missing" detection.
-                match env::var("CTFD_URL") {
-                    Ok(env_val) => {
-                        let trimmed = env_val.trim().to_string();
-                        if trimmed.is_empty() {
-                            return Err(ConfigError::EmptyUrl);
-                        }
-                        Some(trimmed)
-                    }
-                    Err(_) => None,
-                }
-            }
+            // Neither --url nor CTFD_URL was provided (clap handled both).
+            None => None,
         };
 
-        // Resolve token: flag takes precedence, then env var
+        // Resolve token: same logic — clap merged flag + env.
         let raw_token = match &self.token {
-            Some(flag_val) => {
-                if flag_val.trim().is_empty() {
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
                     return Err(ConfigError::EmptyToken);
                 }
-                Some(flag_val.clone())
+                Some(trimmed.to_string())
             }
-            None => match env::var("CTFD_TOKEN") {
-                Ok(env_val) => {
-                    let trimmed = env_val.trim().to_string();
-                    if trimmed.is_empty() {
-                        return Err(ConfigError::EmptyToken);
-                    }
-                    Some(trimmed)
-                }
-                Err(_) => None,
-            },
+            // Neither --token nor CTFD_TOKEN was provided.
+            None => None,
         };
 
         let base_url = raw_url.ok_or(ConfigError::MissingUrl)?;
@@ -144,12 +125,17 @@ impl GlobalArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::sync::Mutex;
 
     /// Global lock to prevent concurrent env var manipulation in tests.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper: set env vars, create GlobalArgs, resolve, then clean up.
+    ///
+    /// Simulates clap's env→flag merging: when a flag field is `None` but the
+    /// corresponding environment variable is set, the env value is filled in
+    /// (exactly as clap's `env` attribute does during real CLI parsing).
     fn resolve_with(
         flag_url: Option<&str>,
         flag_token: Option<&str>,
@@ -175,10 +161,16 @@ mod tests {
             }
         }
 
-        let args = GlobalArgs {
-            url: flag_url.map(String::from),
-            token: flag_token.map(String::from),
-        };
+        // Simulate clap's env merging: flag takes precedence, env fills in when
+        // flag is absent (exactly what clap's `env` attribute does).
+        let url = flag_url
+            .map(String::from)
+            .or_else(|| env_url.map(String::from));
+        let token = flag_token
+            .map(String::from)
+            .or_else(|| env_token.map(String::from));
+
+        let args = GlobalArgs { url, token };
 
         let result = args.resolve();
 
@@ -319,9 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn whitespace_around_flag_values_is_supported() {
-        // Trailing whitespace in URL should not matter but trailing slash is trimmed first
-        // then whitespace is not stripped beyond trimming end slashes
+    fn whitespace_around_flag_values_is_trimmed() {
         let result = resolve_with(
             Some("  https://ctfd.example.com  "),
             Some("  token  "),
@@ -329,10 +319,30 @@ mod tests {
             None,
         )
         .unwrap();
-        // The URL has spaces around it; we don't strip spaces, only trailing slashes.
-        // So the URL retains spaces - this is arguably not ideal but let's keep it simple.
-        assert_eq!(result.base_url, "  https://ctfd.example.com  ");
-        assert_eq!(result.api_token, "  token  ");
+        assert_eq!(result.base_url, "https://ctfd.example.com");
+        assert_eq!(result.api_token, "token");
+    }
+
+    #[test]
+    fn whitespace_around_env_values_is_trimmed() {
+        let result = resolve_with(
+            None,
+            None,
+            Some("  https://ctfd.example.com  "),
+            Some("  token  "),
+        )
+        .unwrap();
+        assert_eq!(result.base_url, "https://ctfd.example.com");
+        assert_eq!(result.api_token, "token");
+    }
+
+    #[test]
+    fn flag_and_env_whitespace_handling_is_consistent() {
+        // Both flag and env values should be trimmed identically.
+        let flag_result = resolve_with(Some("  https://a.com "), Some(" t1 "), None, None).unwrap();
+        let env_result = resolve_with(None, None, Some("  https://a.com "), Some(" t1 ")).unwrap();
+        assert_eq!(flag_result.base_url, env_result.base_url);
+        assert_eq!(flag_result.api_token, env_result.api_token);
     }
 
     #[test]

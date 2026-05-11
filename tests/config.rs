@@ -450,6 +450,96 @@ async fn env_and_flag_config_produce_same_acceptance() {
 }
 
 // ============================================================================
+// Whitespace handling: flag and env values are trimmed consistently
+// ============================================================================
+
+#[tokio::test]
+async fn whitespace_around_flag_url_is_trimmed() {
+    let server = start_leaderboard_mock().await;
+    // Flag URL with leading/trailing whitespace should be trimmed before use.
+    let url_with_spaces = format!("  {}  ", server.uri());
+
+    ctfd()
+        .arg("--url")
+        .arg(&url_with_spaces)
+        .arg("--token")
+        .arg("test-token")
+        .arg("leaderboard")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn whitespace_around_flag_token_is_trimmed() {
+    let server = start_leaderboard_mock().await;
+    // Token with leading/trailing whitespace should be trimmed.
+    // We verify by checking the mock receives the trimmed token.
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("--token")
+        .arg("  test-token  ")
+        .arg("leaderboard")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn whitespace_around_env_url_is_trimmed() {
+    let server = start_leaderboard_mock().await;
+    let url_with_spaces = format!("  {}  ", server.uri());
+
+    ctfd()
+        .arg("leaderboard")
+        .env("CTFD_URL", &url_with_spaces)
+        .env("CTFD_TOKEN", "test-token")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn whitespace_around_env_token_is_trimmed() {
+    let server = start_leaderboard_mock().await;
+
+    ctfd()
+        .arg("leaderboard")
+        .env("CTFD_URL", server.uri())
+        .env("CTFD_TOKEN", "  test-token  ")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn flag_and_env_whitespace_handling_produces_same_result() {
+    // Both flag and env values with whitespace should produce the same
+    // observable behavior (same request reaching the mock).
+    let server = start_leaderboard_mock().await;
+
+    // Via flags (with whitespace)
+    let output_flag = ctfd()
+        .arg("--url")
+        .arg(format!("  {}  ", server.uri()))
+        .arg("--token")
+        .arg("  test-token  ")
+        .arg("leaderboard")
+        .output()
+        .expect("ctfd should run");
+    assert!(output_flag.status.success());
+
+    // Via env (with whitespace)
+    let output_env = ctfd()
+        .arg("leaderboard")
+        .env("CTFD_URL", format!("  {}  ", server.uri()))
+        .env("CTFD_TOKEN", "  test-token  ")
+        .output()
+        .expect("ctfd should run");
+    assert!(output_env.status.success());
+
+    // The stdout should be identical (both reach the same mock, same data).
+    assert_eq!(output_flag.stdout, output_env.stdout);
+}
+
+// ============================================================================
 // Error message clarity
 // ============================================================================
 
