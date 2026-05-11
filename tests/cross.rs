@@ -1398,3 +1398,195 @@ async fn cross_flag_overrides_env_in_sequential_flow() {
         .success()
         .stdout(predicate::str::contains("Flag accepted"));
 }
+
+// ============================================================================
+// ctfd.toml cross-command tests
+// All subcommands can use ctfd.toml config and precedence is respected.
+// ============================================================================
+
+#[tokio::test]
+async fn cross_all_commands_accept_shared_toml_config() {
+    let mock = start_cross_mock().await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"{}\"\n", mock.url, mock.token),
+    )
+    .unwrap();
+
+    // Leaderboard via toml
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CrossTeam"));
+
+    // Status via toml
+    ctfd()
+        .arg("status")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Cross Web"))
+        .stdout(predicate::str::contains("Cross Crypto"));
+
+    // Download via toml — need ctfd.toml in the download output directory too
+    let dl_dir = tempfile::tempdir().unwrap();
+    let dl_toml = dl_dir.path().join("ctfd.toml");
+    std::fs::write(
+        &dl_toml,
+        format!("url = \"{}\"\ntoken = \"{}\"\n", mock.url, mock.token),
+    )
+    .unwrap();
+    ctfd()
+        .arg("download")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dl_dir.path())
+        .assert()
+        .success();
+
+    // Submit via toml
+    ctfd()
+        .arg("submit")
+        .arg("10")
+        .arg("flag{cross-test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn cross_toml_config_matches_flag_config_behavior() {
+    // VAL-CROSS-002: toml config produces same behavior as flags.
+    let mock = start_cross_mock().await;
+
+    // Via flags
+    let out_flag = ctfd()
+        .arg("--url")
+        .arg(&mock.url)
+        .arg("--token")
+        .arg(&mock.token)
+        .arg("leaderboard")
+        .output()
+        .unwrap();
+
+    // Via toml
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"{}\"\n", mock.url, mock.token),
+    )
+    .unwrap();
+
+    let out_toml = ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(out_flag.status.code(), out_toml.status.code());
+    assert_eq!(out_flag.stdout, out_toml.stdout);
+}
+
+#[tokio::test]
+async fn cross_sequential_flow_with_toml_config() {
+    // VAL-CROSS-015: Sequential cross-command flow using ctfd.toml as
+    // the single configuration source.
+    let mock = start_cross_mock().await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"{}\"\n", mock.url, mock.token),
+    )
+    .unwrap();
+
+    // Step 1: status
+    let status_out = ctfd()
+        .arg("status")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(status_out.status.success());
+    let status_stdout = String::from_utf8_lossy(&status_out.stdout);
+    assert!(status_stdout.contains("Cross Web"));
+    assert!(status_stdout.contains("Cross Crypto"));
+
+    // Step 2: download
+    let dl_out = ctfd()
+        .arg("download")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(dl_out.status.success());
+
+    // Step 3: submit
+    ctfd()
+        .arg("submit")
+        .arg("10")
+        .arg("flag{cross-test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn cross_toml_config_token_not_leaked_in_cross_command_output() {
+    // Use a dedicated mock server that expects the secret token from toml.
+    let server = MockServer::start().await;
+    let secret = "cross-toml-secret-token";
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", format!("Token {secret}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "SecretCrossTeam", "score": 500}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"{secret}\"\n", server.uri()),
+    )
+    .unwrap();
+
+    let out = ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains(secret), "stdout should not contain token");
+    assert!(!stderr.contains(secret), "stderr should not contain token");
+}

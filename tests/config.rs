@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Get a command for the ctfd binary.
@@ -590,4 +590,659 @@ fn config_error_messages_are_user_friendly() {
         stderr.to_lowercase().contains("url") || stderr.to_lowercase().contains("base"),
         "Error should mention URL: {stderr}"
     );
+}
+
+// ============================================================================
+// VAL-CONFIG-005: ctfd.toml provides URL and token for every subcommand
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_provides_url_and_token_for_leaderboard() {
+    let server = start_leaderboard_mock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"test-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn toml_config_provides_url_and_token_for_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .and(header("Authorization", "Token test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": 1, "name": "Test", "category": "Web", "value": 100, "solved_by_me": false}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"test-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("status")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Test"));
+}
+
+#[tokio::test]
+async fn toml_config_provides_url_and_token_for_submit() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .and(header("Authorization", "Token test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": {"status": "correct", "message": "Accepted"}
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"test-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("submit")
+        .arg("1")
+        .arg("flag{test}")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn toml_config_provides_url_and_token_for_download() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .and(header("Authorization", "Token test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": 1, "name": "DLC", "category": "Misc", "value": 50, "solved_by_me": false}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges/1"))
+        .and(header("Authorization", "Token test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": {
+                "id": 1, "name": "DLC", "category": "Misc", "value": 50,
+                "description": "Download via toml", "type": "standard",
+                "state": "visible", "solved_by_me": false
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"test-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("download")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let readme = dir.path().join("Misc").join("DLC").join("README.md");
+    assert!(readme.exists(), "README.md should exist");
+    let content = std::fs::read_to_string(&readme).unwrap();
+    assert!(content.contains("Download via toml"));
+}
+
+// ============================================================================
+// VAL-CONFIG-006: Configuration precedence — flags > env > ctfd.toml
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_flags_override_toml() {
+    // Flag URL points to flag_server; toml URL points to toml_server.
+    // The request must go to flag_server, proving flags override toml.
+    let flag_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", "Token flag-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "FlagTeam", "score": 100}]
+        })))
+        .mount(&flag_server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        "url = \"http://toml-host:9999\"\ntoken = \"toml-token\"\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(flag_server.uri())
+        .arg("--token")
+        .arg("flag-token")
+        .arg("leaderboard")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FlagTeam"));
+}
+
+#[tokio::test]
+async fn toml_config_env_overrides_toml() {
+    // Env token overrides toml token; the mock expects the env token.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", "Token env-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "EnvTeam", "score": 200}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!("url = \"{}\"\ntoken = \"toml-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env("CTFD_TOKEN", "env-token")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EnvTeam"));
+}
+
+#[tokio::test]
+async fn toml_config_flag_url_env_token_overrides_toml_both() {
+    // Flag URL + env token, with toml having different values.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", "Token env-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "MixedTeam", "score": 300}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        "url = \"http://toml-host:9999\"\ntoken = \"toml-token\"\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(server.uri())
+        .arg("leaderboard")
+        .env("CTFD_TOKEN", "env-token")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MixedTeam"));
+}
+
+// ============================================================================
+// VAL-CONFIG-007: Malformed ctfd.toml fails before network
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_malformed_fails_before_network() {
+    let server = MockServer::start().await;
+    // No mocks should be hit — we verify zero requests.
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "{{{ not valid toml syntax {{{").unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfd.toml"))
+        .stderr(predicate::str::contains("malformed"));
+
+    // Verify no network request was made to the mock (which isn't even used).
+    // The assertion above already proves we got a config error before
+    // network access.
+    let _ = server; // suppress unused warning
+}
+
+#[tokio::test]
+async fn toml_config_non_string_url_fails_before_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "url = 42\ntoken = \"ok\"\n").unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfd.toml"))
+        .stderr(predicate::str::contains("invalid"));
+}
+
+#[tokio::test]
+async fn toml_config_non_string_token_fails_before_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        "url = \"https://example.com\"\ntoken = [1, 2, 3]\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfd.toml"))
+        .stderr(predicate::str::contains("invalid"));
+}
+
+// ============================================================================
+// VAL-CONFIG-008: Empty ctfd.toml values rejected
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_empty_url_rejected_before_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "url = \"\"\ntoken = \"ok\"\n").unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfd.toml"))
+        .stderr(predicate::str::contains("empty"));
+}
+
+#[tokio::test]
+async fn toml_config_empty_token_rejected_before_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "url = \"https://example.com\"\ntoken = \"\"\n").unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfd.toml"))
+        .stderr(predicate::str::contains("empty"));
+}
+
+#[tokio::test]
+async fn toml_config_whitespace_only_url_rejected_before_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "url = \"   \"\ntoken = \"ok\"\n").unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfd.toml"))
+        .stderr(predicate::str::contains("empty"));
+}
+
+// ============================================================================
+// VAL-CONFIG-009: ctfd.toml resolved from process current directory
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_current_directory_only() {
+    // Create ctfd.toml in one directory, run from another — the command
+    // should NOT pick up the toml from the first directory.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", "Token dir-b-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "DirB", "score": 400}]
+        })))
+        .mount(&server)
+        .await;
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let toml_a = dir_a.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_a,
+        "url = \"http://dir-a:9999\"\ntoken = \"dir-a-token\"\n",
+    )
+    .unwrap();
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let toml_b = dir_b.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_b,
+        format!("url = \"{}\"\ntoken = \"dir-b-token\"\n", server.uri()),
+    )
+    .unwrap();
+
+    // Run from dir_b — should use dir_b's toml, not dir_a's.
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir_b.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DirB"));
+
+    // Run from dir_a — no env/flags, dir_a's toml points to non-existent host
+    // so we expect a network error (not a config error from dir_b's toml).
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir_a.path())
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("Network")
+                .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
+        );
+}
+
+#[tokio::test]
+async fn toml_config_not_found_in_other_directory() {
+    // Running from a directory without ctfd.toml should not find one
+    // in an unrelated directory.
+    let dir = tempfile::tempdir().unwrap();
+    // No ctfd.toml in this dir
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("URL").or(predicate::str::contains("url")));
+}
+
+// ============================================================================
+// Token secrecy: ctfd.toml token values must not appear in output
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_token_not_in_error_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    // Only provide token, missing URL → error should mention missing URL
+    // but NOT leak the token.
+    std::fs::write(&toml_path, "token = \"super-secret-toml-token\"\n").unwrap();
+
+    let output = ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stderr.contains("super-secret-toml-token"),
+        "stderr should not contain token: {stderr}"
+    );
+    assert!(
+        !stdout.contains("super-secret-toml-token"),
+        "stdout should not contain token"
+    );
+}
+
+#[tokio::test]
+async fn toml_config_token_not_in_malformed_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        "invalid toml with super-secret-toml-token hidden\n",
+    )
+    .unwrap();
+
+    let output = ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("super-secret-toml-token"),
+        "malformed TOML error should not leak token: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn toml_config_token_not_in_success_output() {
+    let server = start_leaderboard_mock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        format!(
+            "url = \"{}\"\ntoken = \"super-secret-toml-token\"\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    // The mock expects "test-token", but we're using a different token from toml.
+    // Let's use the mock's expected token to verify success output.
+    // Actually, we need a mock that expects the toml token.
+    let server2 = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", "Token super-secret-toml-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "SecretTeam", "score": 500}]
+        })))
+        .mount(&server2)
+        .await;
+
+    let dir2 = tempfile::tempdir().unwrap();
+    let toml2 = dir2.path().join("ctfd.toml");
+    std::fs::write(
+        &toml2,
+        format!(
+            "url = \"{}\"\ntoken = \"super-secret-toml-token\"\n",
+            server2.uri()
+        ),
+    )
+    .unwrap();
+
+    let output = ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir2.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("super-secret-toml-token"),
+        "success output should not contain token: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("super-secret-toml-token"),
+        "stderr should not contain token: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn toml_config_missing_url_with_token_does_not_leak_token() {
+    // Only token in toml, URL missing — error should not leak token.
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "token = \"leaked-if-shown-12345\"\n").unwrap();
+
+    let output = ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stderr.contains("leaked-if-shown-12345"),
+        "stderr should not leak token: {stderr}"
+    );
+    assert!(
+        !stdout.contains("leaked-if-shown-12345"),
+        "stdout should not leak token"
+    );
+    // Error should mention missing URL configuration
+    assert!(
+        stderr.to_lowercase().contains("url"),
+        "Error should mention URL: {stderr}"
+    );
+}
+
+// ============================================================================
+// ctfd.toml with empty file is treated as no config
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_empty_file_falls_through_to_missing_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(&toml_path, "").unwrap();
+
+    ctfd()
+        .arg("leaderboard")
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("URL").or(predicate::str::contains("url")));
+}
+
+// ============================================================================
+// ctfd.toml flags override env overrides toml — full precedence chain
+// ============================================================================
+
+#[tokio::test]
+async fn toml_config_full_precedence_chain() {
+    // flag URL > env URL > toml URL
+    // flag token > env token > toml token
+    let flag_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .and(header("Authorization", "Token flag-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [{"pos": 1, "name": "FullPrecedence", "score": 999}]
+        })))
+        .mount(&flag_server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let toml_path = dir.path().join("ctfd.toml");
+    std::fs::write(
+        &toml_path,
+        "url = \"http://toml-host:9999\"\ntoken = \"toml-token\"\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .arg("--url")
+        .arg(flag_server.uri())
+        .arg("--token")
+        .arg("flag-token")
+        .arg("leaderboard")
+        .env("CTFD_URL", "http://env-host:8888")
+        .env("CTFD_TOKEN", "env-token")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FullPrecedence"));
 }
