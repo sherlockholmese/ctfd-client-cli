@@ -1,5 +1,5 @@
 use crate::config::ResolvedConfig;
-use crate::models::{Challenge, ChallengeDetail, CtfdResponse, ScoreboardEntry};
+use crate::models::{Challenge, ChallengeDetail, CtfdResponse, ScoreboardEntry, SubmitResponse};
 use reqwest::Client as HttpClient;
 
 /// Errors that can occur when interacting with the CTFd API.
@@ -153,5 +153,82 @@ impl CtfdClient {
             .await
             .map(|b| b.to_vec())
             .map_err(CtfdError::Network)
+    }
+
+    /// Perform an authenticated POST request with a JSON body and parse the
+    /// CTFd envelope from the response.
+    async fn post_json<T, B>(&self, path: &str, body: &B) -> Result<T, CtfdError>
+    where
+        T: serde::de::DeserializeOwned,
+        B: serde::Serialize,
+    {
+        let url = self.api_url(path);
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Token {}", self.api_token))
+            .json(body)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        // Unauthorized / Forbidden → clear auth guidance.
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(CtfdError::Api(
+                "Unauthorized — check that your API token is valid.".to_string(),
+            ));
+        }
+
+        // Other client errors.
+        if status.is_client_error() {
+            return Err(CtfdError::Api(format!(
+                "API request failed with status {}",
+                status.as_u16()
+            )));
+        }
+
+        // Server errors.
+        if status.is_server_error() {
+            return Err(CtfdError::Api(format!(
+                "CTFd server error (HTTP {})",
+                status.as_u16()
+            )));
+        }
+
+        // Read body first so we can give a useful parse error.
+        let body_text = response.text().await?;
+
+        let envelope: CtfdResponse<T> = serde_json::from_str(&body_text)
+            .map_err(|e| CtfdError::Parse(format!("Invalid or unexpected response format: {e}")))?;
+
+        if !envelope.success {
+            return Err(CtfdError::Api(format!(
+                "API returned an error: {}",
+                envelope.error_message()
+            )));
+        }
+
+        envelope
+            .data
+            .ok_or_else(|| CtfdError::Parse("Response is missing the 'data' field.".to_string()))
+    }
+
+    /// Submit a flag for a challenge via `POST /api/v1/challenges/attempt`.
+    ///
+    /// The request body contains the numeric `challenge_id` and the exact
+    /// `flag` string provided by the user.
+    pub async fn submit_flag(
+        &self,
+        challenge_id: u64,
+        flag: &str,
+    ) -> Result<SubmitResponse, CtfdError> {
+        let body = serde_json::json!({
+            "challenge_id": challenge_id,
+            "submission": flag,
+        });
+
+        self.post_json("/api/v1/challenges/attempt", &body).await
     }
 }

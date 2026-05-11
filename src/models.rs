@@ -94,6 +94,56 @@ pub struct ChallengeDetail {
     pub max_attempts: Option<i64>,
 }
 
+/// Response data from a flag submission attempt.
+///
+/// Returned by `POST /api/v1/challenges/attempt`. The `status` field
+/// indicates the submission outcome.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SubmitResponse {
+    /// Submission outcome: "correct", "incorrect", or "already_solved".
+    pub status: String,
+    /// Human-readable message from the server.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Classification of a flag submission result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmitOutcome {
+    /// The flag was accepted (correct).
+    Accepted,
+    /// The flag was rejected (incorrect).
+    Rejected,
+    /// The challenge was already solved by this user.
+    AlreadySolved,
+}
+
+impl SubmitResponse {
+    /// Classify the submission status into a high-level outcome.
+    pub fn outcome(&self) -> SubmitOutcome {
+        match self.status.as_str() {
+            "correct" => SubmitOutcome::Accepted,
+            "already_solved" => SubmitOutcome::AlreadySolved,
+            _ => SubmitOutcome::Rejected,
+        }
+    }
+
+    /// A user-facing message describing the outcome.
+    pub fn user_message(&self) -> String {
+        match self.outcome() {
+            SubmitOutcome::Accepted => "Flag accepted! Challenge solved.".to_string(),
+            SubmitOutcome::Rejected => {
+                if let Some(ref msg) = self.message {
+                    format!("Flag rejected: {msg}")
+                } else {
+                    "Flag rejected (incorrect).".to_string()
+                }
+            }
+            SubmitOutcome::AlreadySolved => "Challenge already solved.".to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +333,43 @@ mod tests {
         let detail: ChallengeDetail = serde_json::from_str(json).expect("should parse");
         let files = detail.files.unwrap();
         assert!(files.is_empty());
+    }
+
+    // --- SubmitResponse parsing ---
+
+    #[test]
+    fn parse_submit_correct() {
+        let json = r#"{"status":"correct","message":"Correct!"}"#;
+        let resp: SubmitResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(resp.status, "correct");
+        assert_eq!(resp.message.as_deref(), Some("Correct!"));
+        assert_eq!(resp.outcome(), SubmitOutcome::Accepted);
+        assert!(resp.user_message().contains("accepted"));
+    }
+
+    #[test]
+    fn parse_submit_incorrect() {
+        let json = r#"{"status":"incorrect","message":"Incorrect!"}"#;
+        let resp: SubmitResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(resp.status, "incorrect");
+        assert_eq!(resp.outcome(), SubmitOutcome::Rejected);
+        assert!(resp.user_message().contains("rejected"));
+    }
+
+    #[test]
+    fn parse_submit_already_solved() {
+        let json = r#"{"status":"already_solved","message":"You already solved this."}"#;
+        let resp: SubmitResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(resp.status, "already_solved");
+        assert_eq!(resp.outcome(), SubmitOutcome::AlreadySolved);
+        assert!(resp.user_message().contains("already solved"));
+    }
+
+    #[test]
+    fn parse_submit_missing_message() {
+        let json = r#"{"status":"incorrect"}"#;
+        let resp: SubmitResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(resp.outcome(), SubmitOutcome::Rejected);
+        assert!(resp.message.is_none());
     }
 }
