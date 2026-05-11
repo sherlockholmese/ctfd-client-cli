@@ -34,6 +34,26 @@ pub struct ScoreboardEntry {
     pub score: i64,
 }
 
+/// A visible challenge from the CTFd challenge list.
+///
+/// Returned by `GET /api/v1/challenges`.  Uses `#[serde(rename)]` to map
+/// the snake_case CTFd field name `solved_by_me` to the struct field.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Challenge {
+    /// Numeric challenge ID.
+    #[allow(dead_code)]
+    pub id: u64,
+    /// User-facing challenge name.
+    pub name: String,
+    /// Category (e.g. "Web", "Crypto", "Forensics").
+    pub category: String,
+    /// Point value.
+    pub value: i64,
+    /// Whether the authenticated user has solved this challenge.
+    #[serde(rename = "solved_by_me")]
+    pub solved_by_me: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +98,51 @@ mod tests {
             serde_json::from_str(json).expect("should parse");
         assert!(!resp.success);
         assert_eq!(resp.error_message(), "unknown API error");
+    }
+
+    // --- Challenge parsing ---
+
+    #[test]
+    fn parse_challenge_with_solved_by_me() {
+        let json = r#"{"success":true,"data":[
+            {"id":1,"name":"Baby Login","value":100,"category":"Web","solved_by_me":false},
+            {"id":2,"name":"RSA 101","value":200,"category":"Crypto","solved_by_me":true}
+        ]}"#;
+        let resp: CtfdResponse<Vec<Challenge>> = serde_json::from_str(json).expect("should parse");
+        assert!(resp.success);
+        let challenges = resp.data.unwrap();
+        assert_eq!(challenges.len(), 2);
+
+        assert_eq!(challenges[0].id, 1);
+        assert_eq!(challenges[0].name, "Baby Login");
+        assert_eq!(challenges[0].category, "Web");
+        assert_eq!(challenges[0].value, 100);
+        assert!(!challenges[0].solved_by_me);
+
+        assert_eq!(challenges[1].id, 2);
+        assert_eq!(challenges[1].name, "RSA 101");
+        assert_eq!(challenges[1].category, "Crypto");
+        assert_eq!(challenges[1].value, 200);
+        assert!(challenges[1].solved_by_me);
+    }
+
+    #[test]
+    fn parse_empty_challenge_list() {
+        let json = r#"{"success":true,"data":[]}"#;
+        let resp: CtfdResponse<Vec<Challenge>> = serde_json::from_str(json).expect("should parse");
+        assert!(resp.success);
+        let challenges = resp.data.unwrap();
+        assert!(challenges.is_empty());
+    }
+
+    #[test]
+    fn parse_challenge_missing_optional_fields() {
+        // CTFd may omit some fields; verify serde handles missing fields gracefully.
+        let json = r#"{"success":true,"data":[{"id":1,"name":"Minimal","category":"Misc","value":0,"solved_by_me":false}]}"#;
+        let resp: CtfdResponse<Vec<Challenge>> = serde_json::from_str(json).expect("should parse");
+        assert!(resp.success);
+        let challenges = resp.data.unwrap();
+        assert_eq!(challenges[0].id, 1);
+        assert_eq!(challenges[0].name, "Minimal");
     }
 }

@@ -1,5 +1,5 @@
 use crate::config::ResolvedConfig;
-use crate::models::{CtfdResponse, ScoreboardEntry};
+use crate::models::{Challenge, CtfdResponse, ScoreboardEntry};
 use reqwest::Client as HttpClient;
 
 /// Errors that can occur when interacting with the CTFd API.
@@ -106,5 +106,10 @@ impl CtfdClient {
     /// Fetch the scoreboard / leaderboard from the CTFd API.
     pub async fn get_leaderboard(&self) -> Result<Vec<ScoreboardEntry>, CtfdError> {
         self.get::<Vec<ScoreboardEntry>>("/api/v1/scoreboard").await
+    }
+
+    /// Fetch the list of visible challenges from the CTFd API.
+    pub async fn get_challenges(&self) -> Result<Vec<Challenge>, CtfdError> {
+        self.get::<Vec<Challenge>>("/api/v1/challenges").await
     }
 }
