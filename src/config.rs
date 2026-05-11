@@ -23,7 +23,8 @@ pub struct GlobalArgs {
         long = "url",
         env = "CTFD_URL",
         help = "CTFd base URL (e.g. https://ctfd.example.com)",
-        global = true
+        global = true,
+        hide_env_values = true
     )]
     pub url: Option<String>,
 
@@ -32,7 +33,8 @@ pub struct GlobalArgs {
         long = "token",
         env = "CTFD_TOKEN",
         help = "CTFd API token for authentication",
-        global = true
+        global = true,
+        hide_env_values = true
     )]
     pub token: Option<String>,
 }
