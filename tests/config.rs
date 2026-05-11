@@ -406,8 +406,7 @@ async fn all_subcommands_accept_global_flags() {
         .failure()
         .stderr(
             predicate::str::contains("Network")
-                .or(predicate::str::contains("connection")
-                    .or(predicate::str::contains("request"))),
+                .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
         );
 
     // download, submit are still stubs that don't make network calls
