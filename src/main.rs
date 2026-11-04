@@ -4,27 +4,30 @@ mod config;
 mod fs_util;
 mod models;
 
-use clap::Parser;
-use config::Cli;
+use clap::{CommandFactory, Parser};
+use config::{Cli, Commands};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Resolve configuration.  For auto-submit (single-arg submit), the
-    // resolution chain includes the challenge-root ctfd.toml as a final
-    // fallback after flags, environment, and current-directory ctfd.toml.
-    let is_auto_submit = matches!(
-        &cli.command,
-        crate::config::Commands::Submit { arg2: None, .. }
-    );
-    let resolved = if is_auto_submit {
-        cli.global_args.resolve_for_auto_submit()
-    } else {
-        cli.global_args.resolve()
-    };
+    // Commands that do not need a resolved configuration.
+    match cli.command {
+        Commands::Init(args) => return commands::init::run(&cli.global_args, args).await,
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "ctfd-client",
+                &mut std::io::stdout(),
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
 
-    let resolved = match resolved {
+    // Resolve configuration (flags > env > nearest ctfd.toml).
+    let resolved = match cli.global_args.resolve() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("Configuration error: {e}");

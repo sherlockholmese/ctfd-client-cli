@@ -1,21 +1,21 @@
 pub mod download;
+pub mod init;
 pub mod leaderboard;
 pub mod status;
 pub mod submit;
 
-use crate::config::ResolvedConfig;
+use crate::config::{Commands, ResolvedConfig};
 
-/// Shared entry point for all command handlers (async).
-pub async fn run_command(
-    config: ResolvedConfig,
-    command: crate::config::Commands,
-) -> anyhow::Result<()> {
+/// Shared entry point for command handlers that need a resolved
+/// configuration (`init` and `completions` are handled in `main`).
+pub async fn run_command(config: ResolvedConfig, command: Commands) -> anyhow::Result<()> {
     match command {
-        crate::config::Commands::Leaderboard => leaderboard::run(config).await,
-        crate::config::Commands::Status => status::run(config).await,
-        crate::config::Commands::Download => download::run(config).await,
-        crate::config::Commands::Submit { arg1, arg2 } => {
-            submit::run(config, &arg1, arg2.as_deref()).await
+        Commands::Leaderboard => leaderboard::run(config).await,
+        Commands::Status(args) => status::run(config, args).await,
+        Commands::Download(args) => download::run(config, args).await,
+        Commands::Submit(args) => submit::run(config, args).await,
+        Commands::Init(_) | Commands::Completions { .. } => {
+            unreachable!("handled before configuration is resolved")
         }
     }
 }

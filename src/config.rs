@@ -1,12 +1,25 @@
 use clap::{Args, Parser, Subcommand};
 
+const QUICK_START: &str = "\
+Quick start:
+  ctfd-client init https://ctf.example.com   Save URL + token for this folder
+  ctfd-client dl                             Download every challenge
+  ctfd-client ls -u                          What's left to solve (with IDs)
+  ctfd-client s 'flag{...}'                  Submit from inside a challenge folder
+  ctfd-client s rsa 'flag{...}'              Submit by challenge name or ID
+  ctfd-client lb                             Scoreboard
+
+Run `ctfd-client <command> -h` for examples of each command.";
+
 /// CTFd client CLI — interact with a CTFd instance from the terminal.
 #[derive(Parser, Debug)]
 #[command(
     name = "ctfd-client",
-    about = "CTFd player/client CLI — interact with a CTFd instance from the terminal.",
+    about = "Download CTFd challenges, track progress, and submit flags from the terminal.",
     long_about = None,
-    version
+    version,
+    arg_required_else_help = true,
+    after_help = QUICK_START
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -24,7 +37,8 @@ pub struct GlobalArgs {
         env = "CTFD_URL",
         help = "CTFd base URL (e.g. https://ctfd.example.com)",
         global = true,
-        hide_env_values = true
+        hide_env_values = true,
+        help_heading = "Connection (normally read from ctfd.toml)"
     )]
     pub url: Option<String>,
 
@@ -34,34 +48,185 @@ pub struct GlobalArgs {
         env = "CTFD_TOKEN",
         help = "CTFd API token for authentication",
         global = true,
-        hide_env_values = true
+        hide_env_values = true,
+        help_heading = "Connection (normally read from ctfd.toml)"
     )]
     pub token: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Display the CTF leaderboard / scoreboard
+    /// Set up this folder for a CTF: verify and save URL + token to ctfd.toml
+    #[command(
+        visible_alias = "login",
+        after_help = "\
+Examples:
+  ctfd-client init https://ctf.example.com            Prompts for the token (hidden)
+  ctfd-client init https://ctf.example.com --token ctfd_xxx
+
+Create a token in CTFd under Settings → Access Tokens. Every command run in
+this folder, or in a category/challenge folder below it, then uses it."
+    )]
+    Init(InitArgs),
+
+    /// Show challenges by category with IDs and solved state
+    #[command(
+        visible_aliases = ["ls", "st"],
+        after_help = "\
+Examples:
+  ctfd-client ls              Everything
+  ctfd-client ls -u           Only unsolved
+  ctfd-client ls -c web       One category"
+    )]
+    Status(StatusArgs),
+
+    /// Download challenges (README, metadata, attachments) — safe to re-run
+    #[command(
+        visible_alias = "dl",
+        long_about = "Download challenges (README, metadata, attachments).\n\n\
+            Safe to re-run during a CTF: attachments already on disk are \
+            skipped, newly released challenges are marked `[new]`, and your \
+            own files inside challenge directories are never touched.\n\n\
+            Downloads go to the folder containing ctfd.toml (or the current \
+            directory), so it works from inside a challenge folder too.",
+        after_help = "\
+Examples:
+  ctfd-client dl                      Everything (re-run to fetch new challenges)
+  ctfd-client dl -u -c pwn -c rev     Unsolved pwn and rev only
+  ctfd-client dl 42 baby              Challenge #42 and names containing \"baby\"
+  ctfd-client dl -f \"Baby Login\"      Re-download one challenge's files"
+    )]
+    Download(DownloadArgs),
+
+    /// Submit flags (auto-detects the challenge from the current folder)
+    #[command(
+        visible_alias = "s",
+        long_about = "Submit flags.\n\n\
+            With only a flag, the challenge is detected from the current \
+            folder (a downloaded category/challenge directory). Otherwise \
+            name the challenge by ID, name, unique part of the name, or \
+            Category/Name.",
+        after_help = "\
+Examples:
+  ctfd-client s 'flag{...}'                    From inside a challenge folder
+  ctfd-client s 42 'flag{...}'                 By ID
+  ctfd-client s 'baby login' 'flag{...}'       By name (or a unique part of it)
+  ./solve.py | ctfd-client s - -r 'flag\\{[^}]*\\}'   Pull the flag out of output
+  ctfd-client s -F flags.txt                   Many at once: `CHALLENGE<TAB>FLAG` per line"
+    )]
+    Submit(SubmitArgs),
+
+    /// Show the scoreboard
+    #[command(visible_aliases = ["lb", "scoreboard"])]
     Leaderboard,
-    /// Show challenge status (categories, names, solved state)
-    Status,
-    /// Download challenges to the current directory
-    Download,
-    /// Submit a flag for a challenge
-    ///
-    /// Supports two forms:
-    /// - Explicit: `ctfd-client submit <challenge-id> <flag>`
-    /// - Auto-detect: `ctfd-client submit <flag>` (run from a downloaded
-    ///   challenge directory; challenge ID is detected from
-    ///   metadata.json or category/challenge-name path).
-    Submit {
-        /// First positional argument: numeric challenge ID in explicit
-        /// mode, or the flag value in auto-detect mode.
-        arg1: String,
-        /// Second positional argument (optional): the flag value when
-        /// an explicit challenge ID is provided as the first argument.
-        arg2: Option<String>,
+
+    /// Print a shell completion script (bash, zsh, fish, ...)
+    #[command(after_help = "\
+Examples:
+  ctfd-client completions bash > ~/.local/share/bash-completion/completions/ctfd-client
+  ctfd-client completions zsh  > ~/.zfunc/_ctfd-client
+  ctfd-client completions fish > ~/.config/fish/completions/ctfd-client.fish")]
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
     },
+}
+
+/// Options for the `init` command.
+#[derive(Args, Debug, Clone)]
+pub struct InitArgs {
+    /// CTFd URL (prompted for if omitted); `https://` is added if missing
+    #[arg(value_name = "URL")]
+    pub url: Option<String>,
+
+    /// Save without checking the token against the server
+    #[arg(long)]
+    pub no_verify: bool,
+}
+
+/// Options for the `status` command.
+#[derive(Args, Debug, Clone)]
+pub struct StatusArgs {
+    /// Only show unsolved challenges
+    #[arg(short = 'u', long)]
+    pub unsolved: bool,
+
+    /// Only show this category (case-insensitive, repeatable)
+    #[arg(short = 'c', long = "category", value_name = "CATEGORY")]
+    pub categories: Vec<String>,
+}
+
+/// Options for the `download` command.
+#[derive(Args, Debug, Clone)]
+pub struct DownloadArgs {
+    /// Only download these challenges: numeric IDs or case-insensitive
+    /// name substrings (all visible challenges when omitted)
+    #[arg(value_name = "CHALLENGE")]
+    pub challenges: Vec<String>,
+
+    /// Directory to download into [default: folder with ctfd.toml, else .]
+    #[arg(short = 'o', long = "output", value_name = "DIR")]
+    pub output: Option<std::path::PathBuf>,
+
+    /// Only download challenges in this category (case-insensitive,
+    /// repeatable)
+    #[arg(short = 'c', long = "category", value_name = "CATEGORY")]
+    pub categories: Vec<String>,
+
+    /// Skip challenges you have already solved
+    #[arg(short = 'u', long)]
+    pub unsolved: bool,
+
+    /// Number of challenges to download in parallel
+    #[arg(
+        short = 'j',
+        long,
+        value_name = "N",
+        default_value_t = 8,
+        value_parser = clap::value_parser!(u32).range(1..=64)
+    )]
+    pub jobs: u32,
+
+    /// Re-download attachments even if they already exist locally
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+/// Options for the `submit` command.
+#[derive(Args, Debug, Clone)]
+pub struct SubmitArgs {
+    /// Challenge ID or name — or, when it is the only argument, the flag
+    #[arg(
+        value_name = "CHALLENGE|FLAG",
+        required_unless_present = "file",
+        conflicts_with = "file"
+    )]
+    pub arg1: Option<String>,
+
+    /// The flag (`-` reads it from stdin)
+    #[arg(value_name = "FLAG", conflicts_with = "file")]
+    pub arg2: Option<String>,
+
+    /// Submit many flags from a file (`-` for stdin). One per line:
+    /// `CHALLENGE<TAB>FLAG`, or `CHALLENGE FLAG` when the challenge is an
+    /// ID or a single word. Blank lines and `#` comments are ignored.
+    #[arg(short = 'F', long = "file", value_name = "PATH")]
+    pub file: Option<std::path::PathBuf>,
+
+    /// Extract the flag from the given text (argument or stdin) with this
+    /// regular expression; the first match is submitted
+    #[arg(
+        short = 'r',
+        long = "regex",
+        value_name = "PATTERN",
+        conflicts_with = "file"
+    )]
+    pub regex: Option<String>,
+
+    /// Seconds to wait before retrying when CTFd rate-limits submissions
+    /// (0 disables retrying)
+    #[arg(long = "wait", value_name = "SECS", default_value_t = 10)]
+    pub wait: u64,
 }
 
 /// Resolved, validated configuration used by all commands.
@@ -75,13 +240,15 @@ pub struct ResolvedConfig {
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(
-        "CTFd base URL is not configured. Provide --url, set CTFD_URL, or add url to ctfd.toml."
+        "CTFd URL is not configured. Run `ctfd-client init <url>` in your CTF folder \
+         (or pass --url / set CTFD_URL)."
     )]
     MissingUrl,
     #[error("CTFd base URL is empty. Provide --url or set CTFD_URL.")]
     EmptyUrl,
     #[error(
-        "CTFd API token is not configured. Provide --token, set CTFD_TOKEN, or add token to ctfd.toml."
+        "CTFd API token is not configured. Run `ctfd-client init <url>` in your CTF folder \
+         (or pass --token / set CTFD_TOKEN)."
     )]
     MissingToken,
     #[error("CTFd API token is empty. Provide --token or set CTFD_TOKEN.")]
@@ -159,14 +326,51 @@ fn read_ctfd_toml_at(
     Ok((url, token))
 }
 
+/// Locations searched for `ctfd.toml`, nearest first: the current
+/// directory, the category directory, and the workspace root — so commands
+/// work from anywhere in a downloaded `category/challenge` tree.  Higher
+/// ancestors are deliberately not searched.
+const TOML_SEARCH_PATHS: [&str; 3] = ["ctfd.toml", "../ctfd.toml", "../../ctfd.toml"];
+
+/// Return a flag/env value trimmed, erroring if it is present but empty.
+fn non_empty(value: &Option<String>, empty: ConfigError) -> Result<Option<String>, ConfigError> {
+    match value {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Err(empty)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+/// Find the nearest workspace directory (one containing `ctfd.toml`).
+pub fn find_workspace_root() -> Option<std::path::PathBuf> {
+    TOML_SEARCH_PATHS
+        .iter()
+        .map(std::path::Path::new)
+        .find(|p| p.is_file())
+        .and_then(|p| p.parent())
+        .map(|dir| {
+            if dir.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                dir.to_path_buf()
+            }
+        })
+}
+
 impl GlobalArgs {
     /// Resolve configuration from CLI flags, environment variables, and
-    /// current-directory `ctfd.toml`.
+    /// the nearest `ctfd.toml` files.
     ///
-    /// Precedence: CLI flags override environment variables, and both
-    /// override `ctfd.toml`.  Clap's `env` attribute merges environment
-    /// values into the flag fields when the flag is not provided, so we
-    /// only need to inspect `self.url` and `self.token`.
+    /// Precedence: CLI flags override environment variables (clap merges
+    /// these), which override `./ctfd.toml`, then `../ctfd.toml`, then
+    /// `../../ctfd.toml`.  Missing values are filled from the nearest file
+    /// that provides them.
     ///
     /// Empty values (whitespace-only) from flags or environment are
     /// treated as missing and produce an immediate error — they do not
@@ -174,129 +378,24 @@ impl GlobalArgs {
     ///
     /// URL trailing slashes are normalized (stripped).
     pub fn resolve(&self) -> Result<ResolvedConfig, ConfigError> {
-        // Resolve URL: clap already merged flag + env, so inspect the field.
-        let raw_url: Option<String> = match &self.url {
-            Some(raw) => {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(ConfigError::EmptyUrl);
-                }
-                Some(trimmed.to_string())
-            }
-            None => None,
-        };
+        let mut url = non_empty(&self.url, ConfigError::EmptyUrl)?;
+        let mut token = non_empty(&self.token, ConfigError::EmptyToken)?;
 
-        // Resolve token: same logic — clap merged flag + env.
-        let raw_token: Option<String> = match &self.token {
-            Some(raw) => {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(ConfigError::EmptyToken);
-                }
-                Some(trimmed.to_string())
+        // Only read config files when flags/env leave something missing.
+        for path in TOML_SEARCH_PATHS {
+            if url.is_some() && token.is_some() {
+                break;
             }
-            None => None,
-        };
-
-        // If both URL and token are provided by flags or environment,
-        // skip ctfd.toml entirely — no need to read or parse it.
-        if let (Some(url), Some(token)) = (&raw_url, &raw_token) {
-            let base_url = url.trim_end_matches('/').to_string();
-            return Ok(ResolvedConfig {
-                base_url,
-                api_token: token.clone(),
-            });
+            let (toml_url, toml_token) = read_ctfd_toml_at(std::path::Path::new(path))?;
+            url = url.or(toml_url);
+            token = token.or(toml_token);
         }
 
-        // One or both values are missing from flags/environment — try
-        // reading ctfd.toml from the current directory as a fallback.
-        let (toml_url, toml_token) = read_ctfd_toml_at(std::path::Path::new("ctfd.toml"))?;
-
-        let base_url = match raw_url.or(toml_url) {
-            Some(u) => u,
-            None => return Err(ConfigError::MissingUrl),
-        };
-
-        let api_token = match raw_token.or(toml_token) {
-            Some(t) => t,
-            None => return Err(ConfigError::MissingToken),
-        };
-
-        // Normalize trailing slash: strip any trailing slashes
-        let base_url = base_url.trim_end_matches('/').to_string();
+        let base_url = url.ok_or(ConfigError::MissingUrl)?;
+        let api_token = token.ok_or(ConfigError::MissingToken)?;
 
         Ok(ResolvedConfig {
-            base_url,
-            api_token,
-        })
-    }
-
-    /// Resolve configuration for auto-submit mode (`ctfd-client submit <flag>`).
-    ///
-    /// This extends the normal resolution by also checking a `ctfd.toml`
-    /// in the inferred challenge workspace root (exactly two directories
-    /// above the current directory) when flags, environment, and
-    /// current-directory `ctfd.toml` are all insufficient.
-    ///
-    /// It does **not** search arbitrary ancestors — only the current
-    /// directory and the challenge root are considered.
-    pub fn resolve_for_auto_submit(&self) -> Result<ResolvedConfig, ConfigError> {
-        // First try the normal resolution chain (flags > env > ./ctfd.toml).
-        match self.resolve() {
-            Ok(cfg) => return Ok(cfg),
-            Err(ConfigError::MissingUrl) | Err(ConfigError::MissingToken) => {
-                // One or both values are still missing — try the challenge
-                // root ctfd.toml (../../ctfd.toml) as a final fallback.
-            }
-            Err(e) => return Err(e),
-        }
-
-        // Re-compute raw flag/env values (same as resolve()).
-        let raw_url: Option<String> = match &self.url {
-            Some(raw) => {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(ConfigError::EmptyUrl);
-                }
-                Some(trimmed.to_string())
-            }
-            None => None,
-        };
-
-        let raw_token: Option<String> = match &self.token {
-            Some(raw) => {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(ConfigError::EmptyToken);
-                }
-                Some(trimmed.to_string())
-            }
-            None => None,
-        };
-
-        // Read current-directory ctfd.toml for any partial values already
-        // resolved.
-        let (cur_url, cur_token) = read_ctfd_toml_at(std::path::Path::new("ctfd.toml"))?;
-
-        // Try the challenge-root ctfd.toml: ../../ctfd.toml
-        let root_path = std::path::Path::new("../../ctfd.toml");
-        let (root_url, root_token) = read_ctfd_toml_at(root_path)?;
-
-        // Merge: flags/env first, then current-dir toml, then root toml.
-        let base_url = match raw_url.or(cur_url).or(root_url) {
-            Some(u) => u,
-            None => return Err(ConfigError::MissingUrl),
-        };
-
-        let api_token = match raw_token.or(cur_token).or(root_token) {
-            Some(t) => t,
-            None => return Err(ConfigError::MissingToken),
-        };
-
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        Ok(ResolvedConfig {
-            base_url,
+            base_url: base_url.trim_end_matches('/').to_string(),
             api_token,
         })
     }

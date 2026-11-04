@@ -868,3 +868,68 @@ async fn trailing_slash_url_works() {
         .success()
         .stdout(predicate::str::contains("SlashTest"));
 }
+
+// ============================================================================
+// Progress summary, IDs, and filters
+// ============================================================================
+
+async fn mount_mixed_challenges(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": 1, "name": "Baby Login", "category": "Web", "value": 100, "solved_by_me": true},
+                {"id": 12, "name": "SQL Injection", "category": "Web", "value": 200, "solved_by_me": false},
+                {"id": 3, "name": "RSA 101", "category": "Crypto", "value": 300, "solved_by_me": false}
+            ]
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn shows_progress_and_ids() {
+    let server = MockServer::start().await;
+    mount_mixed_challenges(&server).await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Solved 1/3 challenges · 100/600 pts",
+        ))
+        .stdout(predicate::str::contains("Web (1/2)"))
+        .stdout(predicate::str::contains("[ ] #12  SQL Injection (200 pts)"))
+        .stdout(predicate::str::contains("[✓] #1   Baby Login (100 pts)"));
+}
+
+#[tokio::test]
+async fn unsolved_and_category_filters() {
+    let server = MockServer::start().await;
+    mount_mixed_challenges(&server).await;
+
+    ctfd()
+        .args([
+            "--url",
+            &server.uri(),
+            "--token",
+            "t",
+            "ls",
+            "-u",
+            "-c",
+            "web",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SQL Injection"))
+        .stdout(predicate::str::contains("Baby Login").not())
+        .stdout(predicate::str::contains("RSA 101").not());
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "ls", "-c", "pwn"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No challenges match"));
+}

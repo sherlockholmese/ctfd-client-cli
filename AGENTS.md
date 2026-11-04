@@ -27,4 +27,4 @@ Commit history follows Conventional Commit-style prefixes such as `feat:`, `fix:
 
 ## Security & Configuration Tips
 
-CTFd credentials are supplied through `--url`, `--token`, `CTFD_URL`, and `CTFD_TOKEN`. Never commit real tokens, print tokens in logs, or add tests that require live credentials. Prefer mocked HTTP interactions for repeatable validation.
+CTFd credentials are supplied through `--url`, `--token`, `CTFD_URL`, `CTFD_TOKEN`, or a `ctfd.toml` written by `ctfd-client init` (searched in `.`, `..`, `../..`). Never commit real tokens, print tokens in logs, or add tests that require live credentials. Prefer mocked HTTP interactions for repeatable validation.

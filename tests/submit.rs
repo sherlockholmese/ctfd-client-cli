@@ -553,22 +553,307 @@ fn token_not_leaked_on_network_error() {
 }
 
 // ============================================================================
-// VAL-SUBMIT-018: Submit requires numeric challenge ID
+// VAL-SUBMIT-018: Non-numeric challenge argument is resolved by name
 // ============================================================================
 
-#[test]
-fn non_numeric_challenge_id_fails_before_network() {
+async fn mount_named_challenges(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"id": 1, "name": "Baby Login", "category": "Web", "value": 100, "solved_by_me": false},
+                {"id": 2, "name": "Baby Heap", "category": "Pwn", "value": 300, "solved_by_me": false}
+            ]
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn challenge_name_resolves_to_id() {
+    let server = MockServer::start().await;
+    mount_named_challenges(&server).await;
+    mount_submit_mock(
+        &server,
+        1,
+        "flag{test}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+
     ctfd()
-        .arg("--url")
-        .arg("http://localhost:9999")
-        .arg("--token")
-        .arg("test-token")
-        .arg("submit")
-        .arg("not-a-number")
-        .arg("flag{test}")
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "baby login", "flag{test}"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Web/Baby Login (#1)"))
+        .stdout(predicate::str::contains("Flag accepted"));
+}
+
+#[tokio::test]
+async fn unique_name_fragment_resolves() {
+    let server = MockServer::start().await;
+    mount_named_challenges(&server).await;
+    mount_submit_mock(
+        &server,
+        2,
+        "flag{heap}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["s", "heap", "flag{heap}"])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn ambiguous_or_unknown_name_fails_without_submitting() {
+    let server = MockServer::start().await;
+    mount_named_challenges(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(submit_response("correct", "")))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "baby", "flag{x}"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("numeric"));
+        .stderr(predicate::str::contains("matches several challenges"))
+        .stderr(predicate::str::contains("Pwn/Baby Heap (#2)"));
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "not-a-challenge", "flag{x}"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No challenge named"));
+}
+
+#[tokio::test]
+async fn flag_from_stdin_with_regex() {
+    let server = MockServer::start().await;
+    mount_submit_mock(
+        &server,
+        7,
+        "flag{piped}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "7", "-", "-r", r"flag\{[^}]*\}"])
+        .write_stdin("[+] exploiting...\n[+] got flag{piped}\n[*] done\n")
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn single_line_stdin_flag_is_trimmed() {
+    let server = MockServer::start().await;
+    mount_submit_mock(
+        &server,
+        7,
+        "flag{line}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "7", "-"])
+        .write_stdin("flag{line}\n")
+        .assert()
+        .success();
+}
+
+#[test]
+fn multi_line_stdin_without_regex_fails_before_network() {
+    ctfd()
+        .args(["--url", "http://localhost:9999", "--token", "test-token"])
+        .args(["submit", "7", "-"])
+        .write_stdin("line one\nline two\n")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--regex"));
+}
+
+#[tokio::test]
+async fn rate_limited_submission_is_retried() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(submit_response(
+            "ratelimited",
+            "You're submitting flags too fast. Slow down.",
+        )))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_submit_mock(
+        &server,
+        1,
+        "flag{x}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "--wait", "1", "1", "flag{x}"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Rate limited"));
+}
+
+#[tokio::test]
+async fn out_of_attempts_403_is_reported_as_rejection() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .set_body_json(submit_response("incorrect", "You have 0 tries remaining")),
+        )
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "1", "flag{x}"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("0 tries remaining"));
+}
+
+#[tokio::test]
+async fn paused_ctf_is_reported() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .respond_with(
+            ResponseTemplate::new(403).set_body_json(submit_response("paused", "MyCTF is paused")),
+        )
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "1", "flag{x}"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("paused"));
+}
+
+#[tokio::test]
+async fn batch_submission_from_file() {
+    let server = MockServer::start().await;
+    mount_named_challenges(&server).await;
+    mount_submit_mock(
+        &server,
+        1,
+        "flag{one}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+    mount_submit_mock(
+        &server,
+        2,
+        "flag{wrong guess}",
+        "test-token",
+        submit_response("incorrect", "Incorrect"),
+        1,
+    )
+    .await;
+
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("flags.txt");
+    std::fs::write(
+        &file,
+        "# solved overnight\n1 flag{one}\nBaby Heap\tflag{wrong guess}\nnope\tflag{z}\n",
+    )
+    .unwrap();
+
+    let output = ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "-F"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unresolved line is an error"
+    );
+    assert!(
+        stdout.contains("[line 2] Web/Baby Login (#1): Flag accepted"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("[line 3] Pwn/Baby Heap (#2): Flag rejected"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[line 4] Error: No challenge named 'nope'"),
+        "{stderr}"
+    );
+    assert!(
+        stdout.contains("1 correct, 0 already solved, 1 incorrect, 1 error"),
+        "{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn auto_submit_marks_local_metadata_solved() {
+    let server = MockServer::start().await;
+    mount_submit_mock(
+        &server,
+        5,
+        "flag{auto}",
+        "test-token",
+        submit_response("correct", "Correct"),
+        1,
+    )
+    .await;
+
+    let temp = tempfile::tempdir().unwrap();
+    let meta = temp.path().join("metadata.json");
+    std::fs::write(&meta, r#"{"id": 5, "name": "X", "solved_by_me": false}"#).unwrap();
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "test-token"])
+        .args(["submit", "flag{auto}"])
+        .current_dir(temp.path())
+        .assert()
+        .success();
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta).unwrap()).unwrap();
+    assert_eq!(value["solved_by_me"], serde_json::json!(true));
+    assert_eq!(value["id"], serde_json::json!(5));
 }
 
 // ============================================================================

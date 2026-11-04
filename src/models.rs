@@ -94,6 +94,13 @@ pub struct ChallengeDetail {
     pub max_attempts: Option<i64>,
 }
 
+/// The authenticated user, from `GET /api/v1/users/me`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct UserMe {
+    /// Display name.
+    pub name: String,
+}
+
 /// Response data from a flag submission attempt.
 ///
 /// Returned by `POST /api/v1/challenges/attempt`. The `status` field
@@ -116,6 +123,11 @@ pub enum SubmitOutcome {
     Rejected,
     /// The challenge was already solved by this user.
     AlreadySolved,
+    /// CTFd refused the attempt because flags are submitted too fast.
+    /// The attempt was not counted, so it is safe to resend.
+    RateLimited,
+    /// The CTF is paused; no submissions are accepted.
+    Paused,
 }
 
 impl SubmitResponse {
@@ -124,6 +136,8 @@ impl SubmitResponse {
         match self.status.as_str() {
             "correct" => SubmitOutcome::Accepted,
             "already_solved" => SubmitOutcome::AlreadySolved,
+            "ratelimited" => SubmitOutcome::RateLimited,
+            "paused" => SubmitOutcome::Paused,
             _ => SubmitOutcome::Rejected,
         }
     }
@@ -140,6 +154,14 @@ impl SubmitResponse {
                 }
             }
             SubmitOutcome::AlreadySolved => "Challenge already solved.".to_string(),
+            SubmitOutcome::RateLimited => match self.message {
+                Some(ref msg) => format!("Rate limited: {msg}"),
+                None => "Rate limited: submitting flags too fast.".to_string(),
+            },
+            SubmitOutcome::Paused => match self.message {
+                Some(ref msg) => format!("Submissions are closed: {msg}"),
+                None => "Submissions are closed: the CTF is paused.".to_string(),
+            },
         }
     }
 }
