@@ -10,7 +10,7 @@ use crate::config::{Commands, ResolvedConfig};
 /// configuration (`init` and `completions` are handled in `main`).
 pub async fn run_command(config: ResolvedConfig, command: Commands) -> anyhow::Result<()> {
     match command {
-        Commands::Leaderboard => leaderboard::run(config).await,
+        Commands::Leaderboard(args) => leaderboard::run(config, args).await,
         Commands::Status(args) => status::run(config, args).await,
         Commands::Download(args) => download::run(config, args).await,
         Commands::Submit(args) => submit::run(config, args).await,

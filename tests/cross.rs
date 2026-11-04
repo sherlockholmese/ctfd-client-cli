@@ -713,7 +713,7 @@ fn cross_missing_token_does_not_leak_on_leaderboard() {
         .output()
         .unwrap();
 
-    // Missing token → config error before network; no token to leak.
+    // Missing token -> config error before network; no token to leak.
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -989,7 +989,7 @@ fn cross_help_output_no_token_echo_with_env() {
 fn cross_validation_error_no_token_echo_leaderboard() {
     let token = "val-leak-lb";
 
-    // Missing URL → config error, token should not appear.
+    // Missing URL -> config error, token should not appear.
     let output = ctfd()
         .arg("leaderboard")
         .arg("--token")
@@ -1008,7 +1008,7 @@ fn cross_validation_error_no_token_echo_leaderboard() {
 fn cross_validation_error_no_token_echo_submit_missing_args() {
     let token = "val-leak-su";
 
-    // Missing challenge_id and flag → usage error from clap.
+    // Missing challenge_id and flag -> usage error from clap.
     let output = ctfd()
         .arg("submit")
         .arg("--url")
@@ -1225,7 +1225,7 @@ async fn cross_error_diagnostics_on_stderr_only_submit() {
 // ============================================================================
 // VAL-CROSS-015: Sequential Cross-Command Flow Uses One Configuration Source
 //
-// A realistic sequence of status → download → submit against one mocked
+// A realistic sequence of status -> download -> submit against one mocked
 // CTFd base URL with one API token, where each command independently
 // honors the same configuration source.
 // ============================================================================

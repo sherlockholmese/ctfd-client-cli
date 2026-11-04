@@ -776,7 +776,7 @@ async fn login_redirect_shows_response_in_frame() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("redirected to its login page"))
-        .stderr(predicate::str::contains("Redirect: →"))
+        .stderr(predicate::str::contains("Redirect: ->"))
         .stderr(predicate::str::contains("╭─ response body"))
         .stderr(predicate::str::contains("│ <!DOCTYPE html>"))
         .stderr(predicate::str::contains("Hint:"))
@@ -801,4 +801,47 @@ async fn unparseable_body_is_shown() {
         ))
         .stderr(predicate::str::contains("│ <html>maintenance</html>"))
         .stderr(predicate::str::contains("HTML page"));
+}
+
+#[tokio::test]
+async fn ctf_not_started_is_explained_clearly() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "message": "Hack N' Flag 2026 has not started yet"
+        })))
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "ls"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::starts_with(
+            "Error: Hack N' Flag 2026 has not started yet.",
+        ))
+        .stderr(predicate::str::contains("Your API token works"))
+        .stderr(predicate::str::contains("check the token").not());
+}
+
+#[tokio::test]
+async fn generic_forbidden_lists_common_causes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "message": "You don't have the permission to access the requested resource."
+        })))
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "ls"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Unauthorized — CTFd refused access (HTTP 403)",
+        ))
+        .stderr(predicate::str::contains("joined a team"));
 }

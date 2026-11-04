@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod fs_util;
 mod models;
+mod tui;
 
 use clap::{CommandFactory, Parser};
 use config::{Cli, Commands};
@@ -14,6 +15,13 @@ async fn main() -> anyhow::Result<()> {
     // Commands that do not need a resolved configuration.
     match cli.command {
         Commands::Init(args) => return commands::init::run(&cli.global_args, args).await,
+        Commands::Leaderboard(ref args) if args.demo => {
+            let mut args = args.clone();
+            if args.cutoff.is_none() {
+                args.cutoff = config::workspace_qualify()?;
+            }
+            return tui::run_demo(args).await;
+        }
         Commands::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "ctfdc", &mut std::io::stdout());
             return Ok(());

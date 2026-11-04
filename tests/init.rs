@@ -141,3 +141,48 @@ async fn commands_find_config_from_challenge_folder() {
         .stderr(predicate::str::contains("Up to date: "));
     assert!(!chal.join("Web").exists(), "download must not nest");
 }
+
+#[tokio::test]
+async fn init_accepts_token_before_ctf_starts() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/me"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "message": "MyCTF has not started yet"
+        })))
+        .mount(&server)
+        .await;
+    let temp = tempfile::tempdir().unwrap();
+
+    ctfd()
+        .args(["init", &server.uri(), "--token", "tok"])
+        .current_dir(temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Token accepted"))
+        .stdout(predicate::str::contains("has not started yet"));
+    assert!(temp.path().join("ctfd.toml").exists());
+}
+
+#[tokio::test]
+async fn init_saves_cutoff_and_keeps_it_on_rerun() {
+    let server = MockServer::start().await;
+    mount_me(&server, "tok").await;
+    let temp = tempfile::tempdir().unwrap();
+
+    ctfd()
+        .args(["init", &server.uri(), "--token", "tok", "--cutoff", "20"])
+        .current_dir(temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Qualifying line: top 20."));
+    ctfd()
+        .args(["init", &server.uri(), "--token", "tok"])
+        .current_dir(temp.path())
+        .assert()
+        .success();
+
+    let table: toml::Table =
+        toml::from_str(&std::fs::read_to_string(temp.path().join("ctfd.toml")).unwrap()).unwrap();
+    assert_eq!(table["cutoff"].as_integer(), Some(20));
+}

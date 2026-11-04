@@ -32,6 +32,63 @@ pub struct ScoreboardEntry {
     pub name: String,
     /// Numeric score.
     pub score: i64,
+    /// Team ID (teams mode) or user ID (users mode).
+    #[serde(default)]
+    pub account_id: Option<u64>,
+    /// `"team"` or `"user"`.
+    #[serde(default)]
+    pub account_type: Option<String>,
+}
+
+/// One account from `GET /api/v1/scoreboard/top/{count}`, with the solve
+/// (and award) history used to draw the score graph.
+#[derive(Debug, Deserialize, Clone)]
+pub struct TopEntry {
+    /// Team or user ID.
+    #[serde(default)]
+    pub id: Option<u64>,
+    /// Display name.
+    pub name: String,
+    /// Point-gaining events, in any order.
+    #[serde(default)]
+    pub solves: Vec<ScoreEvent>,
+}
+
+/// A dated score change (solve or award).
+#[derive(Debug, Deserialize, Clone)]
+pub struct ScoreEvent {
+    /// The solved challenge (absent for awards).
+    #[serde(default)]
+    pub challenge_id: Option<u64>,
+    /// Points gained (awards may be negative).
+    #[serde(default)]
+    pub value: i64,
+    /// ISO 8601 timestamp.
+    pub date: String,
+}
+
+/// A solve from `GET /api/v1/{teams|users}/{id}/solves`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AccountSolve {
+    /// The solved challenge's ID.
+    #[serde(default)]
+    pub challenge_id: Option<u64>,
+    /// ISO 8601 timestamp.
+    pub date: String,
+    /// The solved challenge (for its point value).
+    #[serde(default)]
+    pub challenge: Option<SolvedChallenge>,
+}
+
+/// Minimal challenge info embedded in an [`AccountSolve`].
+#[derive(Debug, Deserialize, Clone)]
+pub struct SolvedChallenge {
+    /// Challenge ID.
+    #[serde(default)]
+    pub id: Option<u64>,
+    /// Point value.
+    #[serde(default)]
+    pub value: i64,
 }
 
 /// A visible challenge from the CTFd challenge list.
@@ -52,6 +109,9 @@ pub struct Challenge {
     /// Whether the authenticated user has solved this challenge.
     #[serde(rename = "solved_by_me")]
     pub solved_by_me: bool,
+    /// Number of accounts that solved it (CTFd 3.x reports this).
+    #[serde(default)]
+    pub solves: Option<u64>,
 }
 
 /// Detailed information about a single challenge.
@@ -99,6 +159,12 @@ pub struct ChallengeDetail {
 pub struct UserMe {
     /// Display name.
     pub name: String,
+    /// User ID.
+    #[serde(default)]
+    pub id: Option<u64>,
+    /// Team ID (teams mode).
+    #[serde(default)]
+    pub team_id: Option<u64>,
 }
 
 /// Response data from a flag submission attempt.

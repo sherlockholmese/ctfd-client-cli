@@ -34,7 +34,7 @@ pub fn sanitize_name(raw: &str) -> String {
                 i += 1;
             }
             '.' if i + 1 < chars.len() && chars[i + 1] == '.' => {
-                // Traversal sequence `..` → `__`.
+                // Traversal sequence `..` -> `__`.
                 result.push('_');
                 result.push('_');
                 // Skip the following separator if present to avoid `___`.

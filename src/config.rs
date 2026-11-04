@@ -64,7 +64,7 @@ Examples:
   ctfdc init https://ctf.example.com   Prompts for the token (hidden)
   ctfdc init https://ctf.example.com --token ctfd_xxx
 
-Create a token in CTFd under Settings → Access Tokens. Every command run in
+Create a token in CTFd under Settings -> Access Tokens. Every command run in
 this folder, or in a category/challenge folder below it, then uses it."
     )]
     Init(InitArgs),
@@ -116,9 +116,23 @@ Examples:
     )]
     Submit(SubmitArgs),
 
-    /// Show the scoreboard
-    #[command(visible_aliases = ["lb", "scoreboard"])]
-    Leaderboard,
+    /// Live full-screen scoreboard with a score graph (plain text when piped)
+    #[command(
+        visible_aliases = ["lb", "scoreboard"],
+        after_help = "\
+Examples:
+  ctfdc lb                 Live scoreboard (q quits, ? shows keys)
+  ctfdc lb -n 5            Refresh every 5 seconds
+  ctfdc lb --top 5         Graph the top 5
+  ctfdc lb --cutoff 10     Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
+  ctfdc lb --plain         Print once as text (also used when piped)
+  ctfdc lb --demo          Try the live view on fictional data
+
+Tab switches between Board (standings, graph, latest solves) and Analysis
+(you vs a rival: gaps, momentum, catch-up targets, categories, your edge).
+Press ? inside for all keys."
+    )]
+    Leaderboard(LeaderboardArgs),
 
     /// Print a shell completion script (bash, zsh, fish, ...)
     #[command(after_help = "\
@@ -142,6 +156,54 @@ pub struct InitArgs {
     /// Save without checking the token against the server
     #[arg(long)]
     pub no_verify: bool,
+
+    /// How many top places qualify (draws the qualifying line on the scoreboard)
+    #[arg(
+        long,
+        visible_alias = "qualify",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub cutoff: Option<u32>,
+}
+
+/// Options for the `leaderboard` command.
+#[derive(Args, Debug, Clone)]
+pub struct LeaderboardArgs {
+    /// Print the scoreboard once as plain text instead of the live view
+    #[arg(short = 'p', long, visible_alias = "print")]
+    pub plain: bool,
+
+    /// Seconds between live updates
+    #[arg(
+        short = 'n',
+        long = "interval",
+        value_name = "SECS",
+        default_value_t = 15,
+        value_parser = clap::value_parser!(u64).range(2..=3600)
+    )]
+    pub interval: u64,
+
+    /// Draw the qualifying line under this place [default: `cutoff` in ctfd.toml]
+    #[arg(
+        long = "cutoff",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub cutoff: Option<u32>,
+
+    /// Open the live view on fictional, simulated data (no server needed)
+    #[arg(long, conflicts_with = "plain")]
+    pub demo: bool,
+
+    /// Number of top teams drawn in the graph
+    #[arg(
+        long = "top",
+        value_name = "N",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u32).range(1..=25)
+    )]
+    pub top: u32,
 }
 
 /// Options for the `status` command.
@@ -268,6 +330,11 @@ pub enum ConfigError {
     /// `ctfd.toml` has an empty `token` value.
     #[error("Configuration file ctfd.toml has an empty token value.")]
     TomlEmptyToken,
+    /// `ctfd.toml` has a `qualify` value that is not a positive whole number.
+    #[error(
+        "Configuration file ctfd.toml has an invalid cutoff value (expected a whole number such as `cutoff = 20`)."
+    )]
+    TomlInvalidQualify,
     /// `ctfd.toml` exists but could not be read (permissions, etc.).
     #[error("Configuration file ctfd.toml could not be read: {0}")]
     TomlReadError(String),
@@ -347,6 +414,31 @@ fn non_empty(value: &Option<String>, empty: ConfigError) -> Result<Option<String
     }
 }
 
+/// Read the optional qualifying line (the top N places qualify) from the
+/// nearest `ctfd.toml`: `cutoff = N`, or its synonym `qualify = N`.
+pub fn workspace_qualify() -> Result<Option<u32>, ConfigError> {
+    let Some(path) = TOML_SEARCH_PATHS
+        .iter()
+        .map(std::path::Path::new)
+        .find(|p| p.is_file())
+    else {
+        return Ok(None);
+    };
+    let content =
+        std::fs::read_to_string(path).map_err(|e| ConfigError::TomlReadError(e.to_string()))?;
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+    let table: toml::Table = toml::from_str(&content).map_err(|_| ConfigError::TomlMalformed)?;
+    match table.get("cutoff").or_else(|| table.get("qualify")) {
+        None => Ok(None),
+        Some(toml::Value::Integer(n)) if *n >= 1 && *n <= i64::from(u32::MAX) => {
+            Ok(Some(*n as u32))
+        }
+        Some(_) => Err(ConfigError::TomlInvalidQualify),
+    }
+}
+
 /// Find the nearest workspace directory (one containing `ctfd.toml`).
 pub fn find_workspace_root() -> Option<std::path::PathBuf> {
     TOML_SEARCH_PATHS
@@ -412,7 +504,7 @@ mod tests {
 
     /// Helper: set env vars, create GlobalArgs, resolve, then clean up.
     ///
-    /// Simulates clap's env→flag merging: when a flag field is `None` but the
+    /// Simulates clap's env->flag merging: when a flag field is `None` but the
     /// corresponding environment variable is set, the env value is filled in
     /// (exactly as clap's `env` attribute does during real CLI parsing).
     fn resolve_with(
@@ -1082,7 +1174,7 @@ token = "toml-token"
 
     #[test]
     fn malformed_toml_errors_when_flag_provides_only_url() {
-        // Flag provides URL, token missing → toml is needed but malformed.
+        // Flag provides URL, token missing -> toml is needed but malformed.
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join("ctfd.toml");
         std::fs::write(&toml_path, "{{{ broken toml {{{").unwrap();

@@ -1,4 +1,4 @@
-use crate::client::{CtfdClient, CtfdError};
+use crate::client::{CtfdClient, CtfdError, DenyKind};
 use crate::config::{GlobalArgs, InitArgs, ResolvedConfig};
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -14,7 +14,8 @@ const CONFIG_FILE: &str = "ctfd.toml";
 /// `ctfd.toml` is added to `.gitignore` so the token is not committed.
 pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
     let path = Path::new(CONFIG_FILE);
-    let (existing_url, existing_token) = read_existing(path);
+    let (existing_url, existing_token, existing_cutoff) = read_existing(path);
+    let cutoff = args.cutoff.or(existing_cutoff);
 
     let url = match first_non_empty([args.url.clone(), global.url.clone(), existing_url]) {
         Some(url) => url,
@@ -37,9 +38,16 @@ pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
     } else {
         match CtfdClient::new(&config).get_me().await {
             Ok(me) => println!("Logged in to {url} as {}.", me.name),
-            Err(CtfdError::Api(msg)) if msg.starts_with("Unauthorized") => anyhow::bail!(
+            Err(CtfdError::Denied { kind, message }) if kind.token_accepted() => {
+                let first = message.lines().next().unwrap_or_default();
+                println!("Token accepted by {url} ({first})");
+            }
+            Err(CtfdError::Denied {
+                kind: DenyKind::BadToken,
+                ..
+            }) => anyhow::bail!(
                 "The server rejected this token. Create a new one in CTFd under \
-                 Settings → Access Tokens ({url}/settings) and run init again."
+                 Settings -> Access Tokens ({url}/settings) and run init again."
             ),
             Err(e) => anyhow::bail!(
                 "Could not verify the token with {url}: {e}\n\
@@ -48,8 +56,11 @@ pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
         }
     }
 
-    write_config(path, &url, &token)?;
+    write_config(path, &url, &token, cutoff)?;
     println!("Saved {CONFIG_FILE} (readable only by you).");
+    if let Some(n) = cutoff {
+        println!("Qualifying line: top {n}.");
+    }
 
     if ensure_gitignored()? {
         println!("Added {CONFIG_FILE} to .gitignore so your token isn't committed.");
@@ -72,14 +83,21 @@ fn first_non_empty<const N: usize>(values: [Option<String>; N]) -> Option<String
         .find(|v| !v.is_empty())
 }
 
-/// Read url/token from an existing config file, ignoring any problems.
-fn read_existing(path: &Path) -> (Option<String>, Option<String>) {
+/// Read url/token/cutoff from an existing config file, ignoring any
+/// problems.
+fn read_existing(path: &Path) -> (Option<String>, Option<String>, Option<u32>) {
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (None, None);
+        return (None, None, None);
     };
     let Ok(table) = toml::from_str::<toml::Table>(&content) else {
-        return (None, None);
+        return (None, None, None);
     };
+    let cutoff = table
+        .get("cutoff")
+        .or_else(|| table.get("qualify"))
+        .and_then(|v| v.as_integer())
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0);
     let get = |key: &str| {
         table
             .get(key)
@@ -87,7 +105,7 @@ fn read_existing(path: &Path) -> (Option<String>, Option<String>) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    (get("url"), get("token"))
+    (get("url"), get("token"), cutoff)
 }
 
 /// Normalize what people paste: add `https://`, drop trailing slashes and
@@ -142,7 +160,7 @@ fn prompt_token(url: &str, existing: Option<String>) -> anyhow::Result<String> {
             anyhow::anyhow!("Missing API token. Pass --token <token> or set CTFD_TOKEN.")
         });
     }
-    println!("Create an API token in CTFd under Settings → Access Tokens ({url}/settings).");
+    println!("Create an API token in CTFd under Settings -> Access Tokens ({url}/settings).");
     let prompt = if existing.is_some() {
         "API token (input hidden, Enter keeps the current one): "
     } else {
@@ -156,10 +174,13 @@ fn prompt_token(url: &str, existing: Option<String>) -> anyhow::Result<String> {
     }
 }
 
-fn write_config(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
+fn write_config(path: &Path, url: &str, token: &str, cutoff: Option<u32>) -> anyhow::Result<()> {
     let mut table = toml::Table::new();
     table.insert("url".into(), toml::Value::String(url.into()));
     table.insert("token".into(), toml::Value::String(token.into()));
+    if let Some(n) = cutoff {
+        table.insert("cutoff".into(), toml::Value::Integer(i64::from(n)));
+    }
     let content = format!(
         "# ctfdc workspace config. Contains your API token: do not share or commit.\n{}",
         toml::to_string(&table)?

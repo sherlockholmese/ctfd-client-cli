@@ -869,3 +869,121 @@ async fn column_alignment_works_with_mixed_widths() {
         .expect("ctfd should run");
     assert_eq!(output.stdout, output2.stdout);
 }
+
+// ============================================================================
+// Plain printout: header, qualifying line, your row
+// ============================================================================
+
+async fn mount_board(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"pos": 1, "name": "Alpha", "score": 5000, "account_id": 1, "account_type": "team"},
+                {"pos": 2, "name": "Beta", "score": 4200, "account_id": 2, "account_type": "team"},
+                {"pos": 3, "name": "Gamma", "score": 4200, "account_id": 3, "account_type": "team"}
+            ]
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true, "data": {"id": 9, "name": "me", "team_id": 3}
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn print_draws_qualifying_line_from_config() {
+    let server = MockServer::start().await;
+    mount_board(&server).await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("ctfd.toml"),
+        format!("url = \"{}\"\ntoken = \"t\"\ncutoff = 2\n", server.uri()),
+    )
+    .unwrap();
+
+    let out = ctfd()
+        .args(["lb", "--print"])
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines[0].contains("Team") && lines[0].contains("Behind"),
+        "{stdout}"
+    );
+    assert!(
+        lines[2].contains("Beta") && lines[2].contains("800"),
+        "{stdout}"
+    );
+    assert!(lines[3].starts_with("── top 2 qualify"), "{stdout}");
+    assert!(
+        lines[4].contains("Gamma") && lines[4].contains("tied"),
+        "{stdout}"
+    );
+    assert!(lines[4].ends_with("<- you"), "{stdout}");
+}
+
+#[tokio::test]
+async fn qualify_key_still_works() {
+    let server = MockServer::start().await;
+    mount_board(&server).await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("ctfd.toml"), "qualify = 1\n").unwrap();
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "lb", "-p"])
+        .current_dir(temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("── top 1 qualify"));
+}
+
+#[tokio::test]
+async fn cutoff_flag_overrides_config() {
+    let server = MockServer::start().await;
+    mount_board(&server).await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("ctfd.toml"), "qualify = 2\n").unwrap();
+
+    ctfd()
+        .args([
+            "--url",
+            &server.uri(),
+            "--token",
+            "t",
+            "lb",
+            "-p",
+            "--cutoff",
+            "1",
+        ])
+        .current_dir(temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("── top 1 qualify"))
+        .stdout(predicate::str::contains("top 2 qualify").not());
+}
+
+#[tokio::test]
+async fn invalid_qualify_is_reported() {
+    let server = MockServer::start().await;
+    mount_board(&server).await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("ctfd.toml"), "cutoff = \"twenty\"\n").unwrap();
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "lb", "-p"])
+        .current_dir(temp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid cutoff value"));
+}

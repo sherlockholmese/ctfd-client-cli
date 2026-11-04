@@ -545,8 +545,8 @@ async fn sanitizes_unsafe_attachment_filenames() {
 
     // The filename should be sanitized. The rsplit('/') on the original URL
     // gives "secret.txt" (after the ".." and "hash"), so the file should exist.
-    // Actually: "/files/hash/../secret.txt" → rsplit('/') → ["secret.txt","..","hash","files",""]
-    // .next() = "secret.txt" ← correct!
+    // Actually: "/files/hash/../secret.txt" -> rsplit('/') -> ["secret.txt","..","hash","files",""]
+    // .next() = "secret.txt" <- correct!
     let file_path = temp
         .path()
         .join("Web")

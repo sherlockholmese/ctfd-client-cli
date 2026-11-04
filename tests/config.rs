@@ -1042,7 +1042,7 @@ async fn toml_config_not_found_in_other_directory() {
 async fn toml_config_token_not_in_error_output() {
     let dir = tempfile::tempdir().unwrap();
     let toml_path = dir.path().join("ctfd.toml");
-    // Only provide token, missing URL → error should mention missing URL
+    // Only provide token, missing URL -> error should mention missing URL
     // but NOT leak the token.
     std::fs::write(&toml_path, "token = \"super-secret-toml-token\"\n").unwrap();
 
@@ -1374,14 +1374,14 @@ async fn auto_submit_ignores_toml_above_challenge_root() {
     std::fs::create_dir_all(&challenge_dir).unwrap();
 
     // Put ctfd.toml in the challenge dir's grandparent (../../../ctfd.toml
-    // relative to the challenge dir → the tempdir's parent).
+    // relative to the challenge dir -> the tempdir's parent).
     // We can't write to the tempdir's parent, so instead we create a
     // nested structure and put the toml at a level above the root.
     // Structure:
-    //   outer/              ← ctfd.toml here (three levels above challenge)
-    //     work_dir/         ← challenge root
-    //       Web/            ← category
-    //         Baby Login/   ← challenge dir
+    //   outer/              <- ctfd.toml here (three levels above challenge)
+    //     work_dir/         <- challenge root
+    //       Web/            <- category
+    //         Baby Login/   <- challenge dir
     //
     // Auto-submit should NOT use outer/ctfd.toml.
     let outer = tempfile::tempdir().unwrap();

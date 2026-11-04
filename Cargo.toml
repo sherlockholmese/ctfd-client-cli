@@ -20,6 +20,9 @@ urlencoding = "2"
 regex = "1"
 clap_complete = "4"
 rpassword = "7"
+ratatui = "0.30.2"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+unicode-width = "0.2"
 
 [dev-dependencies]
 assert_cmd = "2"

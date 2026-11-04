@@ -1,6 +1,7 @@
 use crate::config::ResolvedConfig;
 use crate::models::{
-    Challenge, ChallengeDetail, CtfdResponse, ScoreboardEntry, SubmitResponse, UserMe,
+    AccountSolve, Challenge, ChallengeDetail, CtfdResponse, ScoreboardEntry, SubmitResponse,
+    TopEntry, UserMe,
 };
 use reqwest::Client as HttpClient;
 use std::path::Path;
@@ -31,6 +32,33 @@ pub enum CtfdError {
     /// JSON parsing failed or the response shape is unexpected.
     #[error("Failed to parse API response: {0}")]
     Parse(String),
+
+    /// CTFd refused the request (HTTP 401/403 or a login redirect); `kind`
+    /// says why, `message` is the rendered, user-facing explanation.
+    #[error("{message}")]
+    Denied { kind: DenyKind, message: String },
+}
+
+/// Why CTFd refused a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenyKind {
+    /// The API token is missing, invalid, or expired.
+    BadToken,
+    /// The token is fine, but the CTF has not started yet.
+    NotStarted,
+    /// The token is fine, but the CTF is over.
+    Ended,
+    /// The token is fine, but the CTF is paused.
+    Paused,
+    /// Any other refusal (no team yet, unconfirmed email, banned, hidden).
+    Forbidden,
+}
+
+impl DenyKind {
+    /// Whether the refusal proves the token itself was accepted.
+    pub fn token_accepted(self) -> bool {
+        matches!(self, Self::NotStarted | Self::Ended | Self::Paused)
+    }
 }
 
 /// Authenticated CTFd API client.
@@ -79,6 +107,34 @@ impl CtfdClient {
     /// Fetch the scoreboard / leaderboard from the CTFd API.
     pub async fn get_leaderboard(&self) -> Result<Vec<ScoreboardEntry>, CtfdError> {
         self.get::<Vec<ScoreboardEntry>>("/api/v1/scoreboard").await
+    }
+
+    /// Fetch the top `count` accounts with their score history.
+    ///
+    /// CTFd keys the result by rank (`"1"`, `"2"`, ...); entries are
+    /// returned in rank order.
+    pub async fn get_scoreboard_top(&self, count: u32) -> Result<Vec<TopEntry>, CtfdError> {
+        let map = self
+            .get::<std::collections::HashMap<String, TopEntry>>(&format!(
+                "/api/v1/scoreboard/top/{count}"
+            ))
+            .await?;
+        let mut ranked: Vec<(u64, TopEntry)> = map
+            .into_iter()
+            .map(|(rank, entry)| (rank.parse().unwrap_or(u64::MAX), entry))
+            .collect();
+        ranked.sort_by_key(|(rank, _)| *rank);
+        Ok(ranked.into_iter().map(|(_, e)| e).collect())
+    }
+
+    /// Fetch the solves of one team (`teams`) or user (`users`).
+    pub async fn get_account_solves(
+        &self,
+        kind: &str,
+        account_id: u64,
+    ) -> Result<Vec<AccountSolve>, CtfdError> {
+        self.get::<Vec<AccountSolve>>(&format!("/api/v1/{kind}/{account_id}/solves"))
+            .await
     }
 
     /// Fetch the authenticated user (used to verify a token).
@@ -269,9 +325,7 @@ where
     let parsed = serde_json::from_str::<CtfdResponse<T>>(&body);
 
     if redirected_to_login {
-        return Err(CtfdError::Api(dump.render(
-            "Unauthorized — CTFd redirected to its login page, so the API token was not accepted.",
-        )));
+        return Err(dump.denied(None, true));
     }
 
     let code = status.as_u16();
@@ -286,8 +340,11 @@ where
         return Ok(data);
     }
 
+    if code == 401 || code == 403 {
+        return Err(dump.denied(server_message(&body).as_deref(), false));
+    }
+
     let headline = match code {
-        401 | 403 => Some("Unauthorized — check that your API token is valid.".to_string()),
         429 => Some("Rate limited by the CTFd server (HTTP 429).".to_string()),
         _ if status.is_client_error() => Some(format!("API request failed with status {code}")),
         _ if status.is_server_error() => Some(format!("CTFd server error (HTTP {code})")),
@@ -311,6 +368,91 @@ where
     envelope
         .data
         .ok_or_else(|| CtfdError::Parse(dump.render("Response is missing the 'data' field.")))
+}
+
+/// Extract CTFd's human-readable message from an error body
+/// (`{"message": ...}` or `{"errors": [...]}`), if any.
+fn server_message(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let msg = match value.get("message") {
+        Some(serde_json::Value::String(m)) => Some(m.clone()),
+        _ => match value.get("errors") {
+            Some(serde_json::Value::Array(errors)) => errors
+                .iter()
+                .filter_map(|e| e.as_str())
+                .next()
+                .map(str::to_string),
+            Some(serde_json::Value::Object(errors)) => errors
+                .values()
+                .flat_map(|v| match v {
+                    serde_json::Value::Array(a) => a.clone(),
+                    other => vec![other.clone()],
+                })
+                .find_map(|v| v.as_str().map(str::to_string)),
+            _ => None,
+        },
+    }?;
+    let msg = msg.trim().to_string();
+    (!msg.is_empty()).then_some(msg)
+}
+
+/// Decide why a 401/403 happened and phrase a headline for it.
+fn classify_denial(
+    code: u16,
+    server_msg: Option<&str>,
+    login_redirect: bool,
+) -> (DenyKind, String) {
+    let lower = server_msg.unwrap_or_default().to_lowercase();
+    let with_period = |m: &str| {
+        if m.ends_with(['.', '!', '?']) {
+            m.to_string()
+        } else {
+            format!("{m}.")
+        }
+    };
+
+    if login_redirect {
+        return (
+            DenyKind::BadToken,
+            "Unauthorized — CTFd redirected to its login page, so the API token was not accepted."
+                .to_string(),
+        );
+    }
+    if lower.contains("not started")
+        || lower.contains("not begun")
+        || lower.contains("not yet started")
+    {
+        return (
+            DenyKind::NotStarted,
+            with_period(server_msg.unwrap_or_default()),
+        );
+    }
+    if lower.contains("has ended") || lower.contains("is over") {
+        return (DenyKind::Ended, with_period(server_msg.unwrap_or_default()));
+    }
+    if lower.contains("paused") {
+        return (
+            DenyKind::Paused,
+            with_period(server_msg.unwrap_or_default()),
+        );
+    }
+    if code == 401 || lower.contains("token") {
+        let detail = server_msg.map(|m| format!(": {}", with_period(m)));
+        return (
+            DenyKind::BadToken,
+            format!(
+                "Unauthorized{}",
+                detail.unwrap_or_else(|| " — check that your API token is valid.".to_string())
+            ),
+        );
+    }
+    let detail = server_msg
+        .map(|m| format!(": {}", with_period(m)))
+        .unwrap_or_else(|| ".".to_string());
+    (
+        DenyKind::Forbidden,
+        format!("Unauthorized — CTFd refused access (HTTP {code}){detail}"),
+    )
 }
 
 /// Maximum number of body lines shown in an error.
@@ -337,7 +479,7 @@ impl ResponseDump<'_> {
     fn render(&self, headline: &str) -> String {
         let mut out = format!("{headline}\n\n  Request:  {} {}", self.method, self.url);
         if self.final_url != self.url {
-            out.push_str(&format!("\n  Redirect: → {}", self.final_url));
+            out.push_str(&format!("\n  Redirect: -> {}", self.final_url));
         }
         out.push_str(&format!("\n  Response: HTTP {}", self.status));
         if let Some(ct) = self.content_type {
@@ -376,16 +518,59 @@ impl ResponseDump<'_> {
         out
     }
 
+    /// Build a [`CtfdError::Denied`] with an explanation tailored to the
+    /// reason CTFd gave.  Recognised CTF-state refusals (not started,
+    /// ended, paused) get a short, clean message; anything else keeps the
+    /// full response dump for diagnosis.
+    fn denied(&self, server_msg: Option<&str>, login_redirect: bool) -> CtfdError {
+        let (kind, headline) = classify_denial(self.status.as_u16(), server_msg, login_redirect);
+        let base = self.url.split("/api/").next().unwrap_or(self.url);
+        let explain = match kind {
+            DenyKind::NotStarted => Some(
+                "Your API token works. Challenges and the scoreboard unlock when the CTF \
+                 starts; then `ctfdc dl` downloads everything."
+                    .to_string(),
+            ),
+            DenyKind::Ended => Some(
+                "The CTF is over. Challenges may stay visible, but solves no longer count."
+                    .to_string(),
+            ),
+            DenyKind::Paused => {
+                Some("The organisers paused the CTF; try again once it resumes.".to_string())
+            }
+            DenyKind::BadToken | DenyKind::Forbidden => None,
+        };
+
+        let message = match explain {
+            Some(explain) => format!(
+                "{headline}\n\n  {explain}\n\n  Request:  {} {} -> HTTP {}",
+                self.method, self.url, self.status
+            ),
+            None => {
+                let mut out = self.render(&headline);
+                if kind == DenyKind::Forbidden {
+                    out.push_str(&format!(
+                        "\n  Common causes: you haven't joined a team yet (teams mode: \
+                         {base}/team), your email isn't confirmed, your account is banned, \
+                         or this is hidden from you."
+                    ));
+                }
+                out
+            }
+        };
+        CtfdError::Denied { kind, message }
+    }
+
     fn hint(&self) -> Option<&'static str> {
         let looks_html = self.content_type.is_some_and(|ct| ct.contains("html"))
             || self.body.trim_start().starts_with('<');
         if self.final_url.contains("/login") {
             Some(
-                "create a new token in CTFd under Settings → Access Tokens and run \
+                "create a new token in CTFd under Settings -> Access Tokens and run \
                  `ctfdc init <url>` again.",
             )
         } else if matches!(self.status.as_u16(), 401 | 403) {
-            Some("check the token (CTFd → Settings → Access Tokens); `ctfdc init` updates it.")
+            Some("check the token (CTFd -> Settings -> Access Tokens); `ctfdc init` updates it.")
         } else if self.status.is_server_error() {
             Some("the CTFd server is struggling; try again in a moment.")
         } else if looks_html {
@@ -473,7 +658,7 @@ mod tests {
         .render("Headline");
         assert!(out.starts_with("Headline\n"));
         assert!(out.contains("Request:  GET https://ctf.example.com/api/v1/users/me"));
-        assert!(out.contains("Redirect: → https://ctf.example.com/login?next=x"));
+        assert!(out.contains("Redirect: -> https://ctf.example.com/login?next=x"));
         assert!(out.contains("HTTP 200 OK, text/html"));
         assert!(out.contains("╭─ response body"));
         assert!(out.contains("│ <!DOCTYPE html>"));
@@ -493,6 +678,66 @@ mod tests {
         assert!(out.contains("(first 20 of 50 lines)"));
         assert!(out.contains("│ line 19"));
         assert!(!out.contains("│ line 20"));
+    }
+
+    #[test]
+    fn classifies_ctf_state_refusals() {
+        let (k, h) = classify_denial(403, Some("Hack N' Flag 2026 has not started yet"), false);
+        assert_eq!(k, DenyKind::NotStarted);
+        assert_eq!(h, "Hack N' Flag 2026 has not started yet.");
+        assert_eq!(
+            classify_denial(403, Some("MyCTF has ended"), false).0,
+            DenyKind::Ended
+        );
+        assert_eq!(
+            classify_denial(403, Some("MyCTF is paused"), false).0,
+            DenyKind::Paused
+        );
+        assert_eq!(
+            classify_denial(401, Some("Your access token is invalid"), false).0,
+            DenyKind::BadToken
+        );
+        assert_eq!(
+            classify_denial(403, Some("Your access token has expired"), false).0,
+            DenyKind::BadToken
+        );
+        assert_eq!(classify_denial(403, None, false).0, DenyKind::Forbidden);
+        assert_eq!(classify_denial(200, None, true).0, DenyKind::BadToken);
+    }
+
+    #[test]
+    fn extracts_server_messages() {
+        assert_eq!(server_message(r#"{"message": "x"}"#).as_deref(), Some("x"));
+        assert_eq!(
+            server_message(r#"{"success": false, "errors": ["y"]}"#).as_deref(),
+            Some("y")
+        );
+        assert_eq!(
+            server_message(r#"{"errors": {"field": ["z"]}}"#).as_deref(),
+            Some("z")
+        );
+        assert_eq!(server_message("<html>"), None);
+    }
+
+    #[test]
+    fn not_started_message_is_clean() {
+        let body = r#"{"message": "Hack N' Flag 2026 has not started yet"}"#;
+        let d = dump(
+            403,
+            Some("application/json"),
+            "https://ctf.example.com/api/v1/users/me",
+            body,
+        );
+        let CtfdError::Denied { kind, message } = d.denied(server_message(body).as_deref(), false)
+        else {
+            panic!("expected Denied");
+        };
+        assert_eq!(kind, DenyKind::NotStarted);
+        assert!(message.starts_with("Hack N' Flag 2026 has not started yet.\n"));
+        assert!(message.contains("Your API token works"));
+        assert!(message.contains("-> HTTP 403 Forbidden"));
+        assert!(!message.contains("response body"));
+        assert!(!message.contains("check the token"));
     }
 
     #[test]

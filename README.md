@@ -24,12 +24,12 @@ Running `ctfdc` with no arguments prints this quick start, and every command has
 | `status` | `ls`, `st` | Challenges by category with IDs, solved state and progress |
 | `download` | `dl` | Download challenges and attachments (safe to re-run) |
 | `submit` | `s` | Submit flags by folder, ID, or name |
-| `leaderboard` | `lb`, `scoreboard` | Scoreboard |
+| `leaderboard` | `lb`, `scoreboard` | Live scoreboard with graph and rival analysis (`--print` for text) |
 | `completions <SHELL>` | | Shell completion script |
 
 ## Setup
 
-Get an API token in CTFd under **Settings → Access Tokens**, then run `init` in the folder you want to use for the CTF:
+Get an API token in CTFd under **Settings -> Access Tokens**, then run `init` in the folder you want to use for the CTF:
 
 ```sh
 ctfdc init https://ctf.example.com
@@ -149,11 +149,35 @@ Each line is reported with its outcome, followed by a summary.
 
 Exit codes: `0` correct or already solved, `2` incorrect, `1` errors (network, unknown challenge, CTF paused). CTFd's "you're submitting too fast" responses are waited out and retried (`--wait SECS`, default 10, `0` to disable). An out-of-attempts response is shown as a rejection that includes the server's message.
 
-## Leaderboard
+## Scoreboard
 
 ```sh
-ctfdc lb
+ctfdc lb                 # live full-screen scoreboard
+ctfdc lb --print         # print once as text (-p; also what you get when piped)
+ctfdc lb --demo          # try the live view on fictional, simulated data
 ```
+
+The live view updates every 15 seconds (`-n SECS`), keeps the last good data on screen if an update fails, and has two tabs (`Tab` switches):
+
+- **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `l` switches layout.
+- **Analysis**: you against a rival (the team above you by default; `<-`/`->` changes it). The first two lines say where you stand and what to do: how far behind or ahead you are, your margin to the qualifying line, and how many catch-up challenges it takes to pass them. Below that:
+  - **Catch up**: challenges the rival solved and you haven't, most-solved first, with a running total and a line where you'd pass them.
+  - **Open for both**: challenges neither of you has solved, ranked by how many of the top teams solved them.
+  - **Head to head**: score, solves, points in the last hour / 3 hours, time since the last solve.
+  - **Points by category**: where the rival out-scores you.
+  - **Your edge**: challenges you have that they don't.
+
+Press `?` in the live view for every key.
+
+### Qualifying line
+
+Set how many places qualify in `ctfd.toml` and the scoreboard draws the line under that place (live view, Analysis, `--print`, and `--demo`):
+
+```toml
+cutoff = 20
+```
+
+`ctfdc init <url> --cutoff 20` writes it for you, and `ctfdc lb --cutoff N` overrides it for one run. `qualify = 20` is accepted as a synonym.
 
 ## Test / Validation
 
