@@ -15,12 +15,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Init(args) => return commands::init::run(&cli.global_args, args).await,
         Commands::Completions { shell } => {
-            clap_complete::generate(
-                shell,
-                &mut Cli::command(),
-                "ctfd-client",
-                &mut std::io::stdout(),
-            );
+            clap_complete::generate(shell, &mut Cli::command(), "ctfdc", &mut std::io::stdout());
             return Ok(());
         }
         _ => {}

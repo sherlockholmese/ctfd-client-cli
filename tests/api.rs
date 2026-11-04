@@ -3,9 +3,9 @@ use predicates::prelude::*;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Get a command for the ctfd-client binary.
+/// Get a command for the ctfdc binary.
 fn ctfd() -> Command {
-    Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist")
+    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
 }
 
 // ============================================================================
@@ -718,4 +718,87 @@ async fn api_challenge_detail_missing_data_field() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("missing").or(predicate::str::contains("data")));
+}
+
+// ============================================================================
+// CTFd only honours token auth with a JSON content type; unexpected
+// responses are shown in full
+// ============================================================================
+
+#[tokio::test]
+async fn get_requests_send_json_content_type() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .and(header("Content-Type", "application/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true, "data": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "status"])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn login_redirect_shows_response_in_frame() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", "/login?next=%2Fapi%2Fv1%2Fchallenges"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "text/html; charset=utf-8")
+                .set_body_string("<!DOCTYPE html>\n<html><title>My CTF</title></html>\n"),
+        )
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args([
+            "--url",
+            &server.uri(),
+            "--token",
+            "secret-token-xyz",
+            "status",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("redirected to its login page"))
+        .stderr(predicate::str::contains("Redirect: →"))
+        .stderr(predicate::str::contains("╭─ response body"))
+        .stderr(predicate::str::contains("│ <!DOCTYPE html>"))
+        .stderr(predicate::str::contains("Hint:"))
+        .stderr(predicate::str::contains("secret-token-xyz").not());
+}
+
+#[tokio::test]
+async fn unparseable_body_is_shown() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>maintenance</html>"))
+        .mount(&server)
+        .await;
+
+    ctfd()
+        .args(["--url", &server.uri(), "--token", "t", "lb"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Invalid or unexpected response format",
+        ))
+        .stderr(predicate::str::contains("│ <html>maintenance</html>"))
+        .stderr(predicate::str::contains("HTML page"));
 }

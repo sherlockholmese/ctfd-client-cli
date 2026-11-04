@@ -2,19 +2,19 @@ use clap::{Args, Parser, Subcommand};
 
 const QUICK_START: &str = "\
 Quick start:
-  ctfd-client init https://ctf.example.com   Save URL + token for this folder
-  ctfd-client dl                             Download every challenge
-  ctfd-client ls -u                          What's left to solve (with IDs)
-  ctfd-client s 'flag{...}'                  Submit from inside a challenge folder
-  ctfd-client s rsa 'flag{...}'              Submit by challenge name or ID
-  ctfd-client lb                             Scoreboard
+  ctfdc init https://ctf.example.com   Save URL + token for this folder
+  ctfdc dl                             Download every challenge
+  ctfdc ls -u                          What's left to solve (with IDs)
+  ctfdc s 'flag{...}'                  Submit from inside a challenge folder
+  ctfdc s rsa 'flag{...}'              Submit by challenge name or ID
+  ctfdc lb                             Scoreboard
 
-Run `ctfd-client <command> -h` for examples of each command.";
+Run `ctfdc <command> -h` for examples of each command.";
 
 /// CTFd client CLI — interact with a CTFd instance from the terminal.
 #[derive(Parser, Debug)]
 #[command(
-    name = "ctfd-client",
+    name = "ctfdc",
     about = "Download CTFd challenges, track progress, and submit flags from the terminal.",
     long_about = None,
     version,
@@ -61,8 +61,8 @@ pub enum Commands {
         visible_alias = "login",
         after_help = "\
 Examples:
-  ctfd-client init https://ctf.example.com            Prompts for the token (hidden)
-  ctfd-client init https://ctf.example.com --token ctfd_xxx
+  ctfdc init https://ctf.example.com   Prompts for the token (hidden)
+  ctfdc init https://ctf.example.com --token ctfd_xxx
 
 Create a token in CTFd under Settings → Access Tokens. Every command run in
 this folder, or in a category/challenge folder below it, then uses it."
@@ -74,9 +74,9 @@ this folder, or in a category/challenge folder below it, then uses it."
         visible_aliases = ["ls", "st"],
         after_help = "\
 Examples:
-  ctfd-client ls              Everything
-  ctfd-client ls -u           Only unsolved
-  ctfd-client ls -c web       One category"
+  ctfdc ls          Everything
+  ctfdc ls -u       Only unsolved
+  ctfdc ls -c web   One category"
     )]
     Status(StatusArgs),
 
@@ -91,10 +91,10 @@ Examples:
             directory), so it works from inside a challenge folder too.",
         after_help = "\
 Examples:
-  ctfd-client dl                      Everything (re-run to fetch new challenges)
-  ctfd-client dl -u -c pwn -c rev     Unsolved pwn and rev only
-  ctfd-client dl 42 baby              Challenge #42 and names containing \"baby\"
-  ctfd-client dl -f \"Baby Login\"      Re-download one challenge's files"
+  ctfdc dl                     Everything (re-run to fetch new challenges)
+  ctfdc dl -u -c pwn -c rev    Unsolved pwn and rev only
+  ctfdc dl 42 baby             Challenge #42 and names containing \"baby\"
+  ctfdc dl -f \"Baby Login\"   Re-download one challenge's files"
     )]
     Download(DownloadArgs),
 
@@ -108,11 +108,11 @@ Examples:
             Category/Name.",
         after_help = "\
 Examples:
-  ctfd-client s 'flag{...}'                    From inside a challenge folder
-  ctfd-client s 42 'flag{...}'                 By ID
-  ctfd-client s 'baby login' 'flag{...}'       By name (or a unique part of it)
-  ./solve.py | ctfd-client s - -r 'flag\\{[^}]*\\}'   Pull the flag out of output
-  ctfd-client s -F flags.txt                   Many at once: `CHALLENGE<TAB>FLAG` per line"
+  ctfdc s 'flag{...}'                           From inside a challenge folder
+  ctfdc s 42 'flag{...}'                        By ID
+  ctfdc s 'baby login' 'flag{...}'              By name (or a unique part of it)
+  ./solve.py | ctfdc s - -r 'flag\\{[^}]*\\}'     Pull the flag out of output
+  ctfdc s -F flags.txt                          Many at once: `CHALLENGE<TAB>FLAG` per line"
     )]
     Submit(SubmitArgs),
 
@@ -123,9 +123,9 @@ Examples:
     /// Print a shell completion script (bash, zsh, fish, ...)
     #[command(after_help = "\
 Examples:
-  ctfd-client completions bash > ~/.local/share/bash-completion/completions/ctfd-client
-  ctfd-client completions zsh  > ~/.zfunc/_ctfd-client
-  ctfd-client completions fish > ~/.config/fish/completions/ctfd-client.fish")]
+  ctfdc completions bash > ~/.local/share/bash-completion/completions/ctfdc
+  ctfdc completions zsh  > ~/.zfunc/_ctfdc
+  ctfdc completions fish > ~/.config/fish/completions/ctfdc.fish")]
     Completions {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
@@ -240,14 +240,14 @@ pub struct ResolvedConfig {
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(
-        "CTFd URL is not configured. Run `ctfd-client init <url>` in your CTF folder \
+        "CTFd URL is not configured. Run `ctfdc init <url>` in your CTF folder \
          (or pass --url / set CTFD_URL)."
     )]
     MissingUrl,
     #[error("CTFd base URL is empty. Provide --url or set CTFD_URL.")]
     EmptyUrl,
     #[error(
-        "CTFd API token is not configured. Run `ctfd-client init <url>` in your CTF folder \
+        "CTFd API token is not configured. Run `ctfdc init <url>` in your CTF folder \
          (or pass --token / set CTFD_TOKEN)."
     )]
     MissingToken,

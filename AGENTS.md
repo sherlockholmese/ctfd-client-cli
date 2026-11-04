@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-This is a Rust CLI crate that builds the `ctfd-client` binary from `src/main.rs`. Core API logic lives in `src/client.rs`, data types in `src/models.rs`, configuration resolution in `src/config.rs`, filesystem helpers in `src/fs_util.rs`, and command implementations under `src/commands/`. Integration and command behavior tests are in `tests/` and use mocked CTFd API responses.
+This is a Rust CLI crate that builds the `ctfdc` binary from `src/main.rs`. Core API logic lives in `src/client.rs`, data types in `src/models.rs`, configuration resolution in `src/config.rs`, filesystem helpers in `src/fs_util.rs`, and command implementations under `src/commands/`. Integration and command behavior tests are in `tests/` and use mocked CTFd API responses.
 
 ## Build, Test, and Development Commands
 
 - `cargo build` compiles the project.
 - `cargo run -- <command>` runs the CLI locally, for example `cargo run -- status`.
-- `cargo install --path .` installs the `ctfd-client` binary from this checkout.
+- `cargo install --path .` installs the `ctfdc` binary from this checkout.
 - `cargo fmt --check` verifies Rust formatting.
 - `cargo test` runs the full test suite.
 - `cargo clippy --all-targets --all-features -- -D warnings` runs lint checks with warnings treated as errors.
@@ -27,4 +27,4 @@ Commit history follows Conventional Commit-style prefixes such as `feat:`, `fix:
 
 ## Security & Configuration Tips
 
-CTFd credentials are supplied through `--url`, `--token`, `CTFD_URL`, `CTFD_TOKEN`, or a `ctfd.toml` written by `ctfd-client init` (searched in `.`, `..`, `../..`). Never commit real tokens, print tokens in logs, or add tests that require live credentials. Prefer mocked HTTP interactions for repeatable validation.
+CTFd credentials are supplied through `--url`, `--token`, `CTFD_URL`, `CTFD_TOKEN`, or a `ctfd.toml` written by `ctfdc init` (searched in `.`, `..`, `../..`). Never commit real tokens, print tokens in logs, or add tests that require live credentials. Prefer mocked HTTP interactions for repeatable validation.

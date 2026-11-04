@@ -1,4 +1,4 @@
-//! `ctfd-client init`: verify and save workspace configuration.
+//! `ctfdc init`: verify and save workspace configuration.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -6,7 +6,7 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn ctfd() -> Command {
-    let mut cmd = Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist");
+    let mut cmd = Command::cargo_bin("ctfdc").expect("ctfdc binary should exist");
     cmd.env_remove("CTFD_URL").env_remove("CTFD_TOKEN");
     cmd
 }
@@ -89,7 +89,7 @@ fn init_without_url_and_no_terminal_explains_usage() {
         .write_stdin("")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("ctfd-client init <url>"));
+        .stderr(predicate::str::contains("ctfdc init <url>"));
 }
 
 #[tokio::test]

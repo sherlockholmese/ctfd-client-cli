@@ -194,7 +194,7 @@ pub fn find_challenge<'a>(
         .collect();
     pick(partial)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "No challenge named '{term}'. Run `ctfd-client status` to list challenges and IDs."
+            "No challenge named '{term}'. Run `ctfdc status` to list challenges and IDs."
         )
     })
 }
@@ -429,7 +429,7 @@ fn infer_challenge_path() -> anyhow::Result<(String, String)> {
                 "Cannot auto-detect challenge: current directory has no usable name. \
                  Run this command from a downloaded challenge directory \
                  (category/challenge-name) or use the explicit form: \
-                 ctfd-client submit <challenge-id> <flag>"
+                 ctfdc submit <challenge-id> <flag>"
             )
         })?;
 
@@ -444,7 +444,7 @@ fn infer_challenge_path() -> anyhow::Result<(String, String)> {
                 "Cannot auto-detect challenge: current directory '{}' does not appear \
                  to be inside a category directory. \
                  Run from a downloaded challenge directory (category/challenge-name) \
-                 or use ctfd-client submit <challenge-id> <flag>",
+                 or use ctfdc submit <challenge-id> <flag>",
                 challenge_name
             )
         })?;
@@ -472,13 +472,13 @@ fn match_challenge_by_path(
             "Cannot auto-detect challenge: no challenge matches \
              category '{category}' and name '{name}' from the current directory. \
              Make sure you are in a downloaded challenge directory or use \
-             ctfd-client submit <challenge-id> <flag>"
+             ctfdc submit <challenge-id> <flag>"
         )),
         1 => Ok(matches[0].id),
         _ => Err(anyhow::anyhow!(
             "Cannot auto-detect challenge: multiple challenges match \
              category '{category}' and name '{name}'. \
-             Use ctfd-client submit <challenge-id> <flag> to specify the exact challenge ID"
+             Use ctfdc submit <challenge-id> <flag> to specify the exact challenge ID"
         )),
     }
 }

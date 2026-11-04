@@ -24,7 +24,7 @@ pub async fn run(config: ResolvedConfig, args: StatusArgs) -> anyhow::Result<()>
     let total_points: i64 = challenges.iter().map(|c| c.value).sum();
     let solved_points: i64 = solved.iter().map(|c| c.value).sum();
     println!(
-        "Solved {}/{} challenges · {solved_points}/{total_points} pts",
+        "Solved {}/{} challenges, {solved_points}/{total_points} pts",
         solved.len(),
         challenges.len()
     );

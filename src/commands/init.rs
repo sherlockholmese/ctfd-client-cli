@@ -57,9 +57,9 @@ pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
 
     println!(
         "\nNext steps:\n  \
-         ctfd-client dl     Download all challenges into this folder\n  \
-         ctfd-client ls     List challenges with IDs\n  \
-         cd <Category>/<Challenge> && ctfd-client s 'flag{{...}}'"
+         ctfdc dl     Download all challenges into this folder\n  \
+         ctfdc ls     List challenges with IDs\n  \
+         cd <Category>/<Challenge> && ctfdc s 'flag{{...}}'"
     );
     Ok(())
 }
@@ -95,7 +95,7 @@ fn read_existing(path: &Path) -> (Option<String>, Option<String>) {
 pub fn normalize_url(raw: &str) -> anyhow::Result<String> {
     let mut url = raw.trim().to_string();
     if url.is_empty() {
-        anyhow::bail!("A CTFd URL is required, e.g. ctfd-client init https://ctf.example.com");
+        anyhow::bail!("A CTFd URL is required, e.g. ctfdc init https://ctf.example.com");
     }
     if !url.contains("://") {
         url = format!("https://{url}");
@@ -127,7 +127,7 @@ pub fn normalize_url(raw: &str) -> anyhow::Result<String> {
 
 fn prompt_line(prompt: &str) -> anyhow::Result<String> {
     if !std::io::stdin().is_terminal() {
-        anyhow::bail!("Missing CTFd URL. Usage: ctfd-client init <url>");
+        anyhow::bail!("Missing CTFd URL. Usage: ctfdc init <url>");
     }
     print!("{prompt}");
     std::io::stdout().flush()?;
@@ -161,7 +161,7 @@ fn write_config(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
     table.insert("url".into(), toml::Value::String(url.into()));
     table.insert("token".into(), toml::Value::String(token.into()));
     let content = format!(
-        "# ctfd-client workspace config. Contains your API token: do not share or commit.\n{}",
+        "# ctfdc workspace config. Contains your API token: do not share or commit.\n{}",
         toml::to_string(&table)?
     );
 

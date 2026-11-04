@@ -8,7 +8,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn ctfd() -> Command {
-    Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist")
+    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
 }
 
 fn download(server: &MockServer, dir: &Path, extra: &[&str]) -> assert_cmd::assert::Assert {

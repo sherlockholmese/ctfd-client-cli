@@ -4,7 +4,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn ctfd() -> Command {
-    Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist")
+    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
 }
 
 #[test]
@@ -13,7 +13,7 @@ fn no_arguments_shows_quick_start() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Quick start"))
-        .stderr(predicate::str::contains("ctfd-client init"));
+        .stderr(predicate::str::contains("ctfdc init"));
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn completions_are_generated() {
         .args(["completions", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ctfd-client"));
+        .stdout(predicate::str::contains("ctfdc"));
 }
 
 #[test]
@@ -57,5 +57,5 @@ fn missing_config_points_to_init() {
         .current_dir(temp.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("ctfd-client init"));
+        .stderr(predicate::str::contains("ctfdc init"));
 }

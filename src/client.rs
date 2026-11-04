@@ -51,7 +51,7 @@ impl CtfdClient {
             base_url: config.base_url.clone(),
             api_token: config.api_token.clone(),
             http: HttpClient::builder()
-                .user_agent(concat!("ctfd-client/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("ctfdc/", env!("CARGO_PKG_VERSION")))
                 .connect_timeout(Duration::from_secs(15))
                 // Per-read timeout: large attachments can take a long time
                 // overall, but a stalled connection should not hang forever.
@@ -72,50 +72,8 @@ impl CtfdClient {
         T: serde::de::DeserializeOwned,
     {
         let url = self.api_url(path);
-
         let response = self.send_get(&url).await?;
-
-        let status = response.status();
-
-        // Unauthorized / Forbidden → clear auth guidance.
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(CtfdError::Api(
-                "Unauthorized — check that your API token is valid.".to_string(),
-            ));
-        }
-
-        // Other client errors.
-        if status.is_client_error() {
-            return Err(CtfdError::Api(format!(
-                "API request failed with status {}",
-                status.as_u16()
-            )));
-        }
-
-        // Server errors.
-        if status.is_server_error() {
-            return Err(CtfdError::Api(format!(
-                "CTFd server error (HTTP {})",
-                status.as_u16()
-            )));
-        }
-
-        // Read body first so we can give a useful parse error.
-        let body_text = response.text().await?;
-
-        let envelope: CtfdResponse<T> = serde_json::from_str(&body_text)
-            .map_err(|e| CtfdError::Parse(format!("Invalid or unexpected response format: {e}")))?;
-
-        if !envelope.success {
-            return Err(CtfdError::Api(format!(
-                "API returned an error: {}",
-                envelope.error_message()
-            )));
-        }
-
-        envelope
-            .data
-            .ok_or_else(|| CtfdError::Parse("Response is missing the 'data' field.".to_string()))
+        parse_response("GET", &url, response, false).await
     }
 
     /// Fetch the scoreboard / leaderboard from the CTFd API.
@@ -156,6 +114,9 @@ impl CtfdClient {
                 .http
                 .get(url)
                 .header("Authorization", format!("Token {}", self.api_token))
+                // CTFd only honours `Authorization: Token` on requests with
+                // a JSON content type; without it, it redirects to /login.
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .send()
                 .await;
 
@@ -248,67 +209,7 @@ impl CtfdClient {
             .send()
             .await?;
 
-        let status = response.status();
-
-        // CTFd reports some submission outcomes with a 403/429 status but a
-        // regular envelope (e.g. `ratelimited`, `paused`, or "0 tries
-        // remaining").  Prefer that envelope over a generic HTTP error.
-        if status.as_u16() == 403 || status.as_u16() == 429 {
-            let body_text = response.text().await.unwrap_or_default();
-            if let Ok(CtfdResponse {
-                success: true,
-                data: Some(data),
-                ..
-            }) = serde_json::from_str::<CtfdResponse<T>>(&body_text)
-            {
-                return Ok(data);
-            }
-            return Err(CtfdError::Api(if status.as_u16() == 429 {
-                "Rate limited by the CTFd server (HTTP 429).".to_string()
-            } else {
-                "Unauthorized — check that your API token is valid.".to_string()
-            }));
-        }
-
-        // Unauthorized / Forbidden → clear auth guidance.
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(CtfdError::Api(
-                "Unauthorized — check that your API token is valid.".to_string(),
-            ));
-        }
-
-        // Other client errors.
-        if status.is_client_error() {
-            return Err(CtfdError::Api(format!(
-                "API request failed with status {}",
-                status.as_u16()
-            )));
-        }
-
-        // Server errors.
-        if status.is_server_error() {
-            return Err(CtfdError::Api(format!(
-                "CTFd server error (HTTP {})",
-                status.as_u16()
-            )));
-        }
-
-        // Read body first so we can give a useful parse error.
-        let body_text = response.text().await?;
-
-        let envelope: CtfdResponse<T> = serde_json::from_str(&body_text)
-            .map_err(|e| CtfdError::Parse(format!("Invalid or unexpected response format: {e}")))?;
-
-        if !envelope.success {
-            return Err(CtfdError::Api(format!(
-                "API returned an error: {}",
-                envelope.error_message()
-            )));
-        }
-
-        envelope
-            .data
-            .ok_or_else(|| CtfdError::Parse("Response is missing the 'data' field.".to_string()))
+        parse_response("POST", &url, response, true).await
     }
 
     /// Submit a flag for a challenge via `POST /api/v1/challenges/attempt`.
@@ -327,6 +228,194 @@ impl CtfdClient {
 
         self.post_json("/api/v1/challenges/attempt", &body).await
     }
+}
+
+/// Classify a CTFd API response and parse its envelope.
+///
+/// Every failure carries a [`ResponseDump`] — the request, status,
+/// content type, any redirect, and the (pretty-printed, truncated) body —
+/// so unexpected responses can be diagnosed from the error alone.
+///
+/// With `outcome_envelopes`, a 403/429 carrying a successful envelope is
+/// returned as data: CTFd reports submission outcomes such as
+/// `ratelimited`, `paused`, or "0 tries remaining" that way.
+async fn parse_response<T>(
+    method: &str,
+    url: &str,
+    response: reqwest::Response,
+    outcome_envelopes: bool,
+) -> Result<T, CtfdError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let redirected_to_login = response.url().path().starts_with("/login");
+    let body = response.text().await?;
+
+    let dump = ResponseDump {
+        method,
+        url,
+        final_url: &final_url,
+        status,
+        content_type: content_type.as_deref(),
+        body: &body,
+    };
+    let parsed = serde_json::from_str::<CtfdResponse<T>>(&body);
+
+    if redirected_to_login {
+        return Err(CtfdError::Api(dump.render(
+            "Unauthorized — CTFd redirected to its login page, so the API token was not accepted.",
+        )));
+    }
+
+    let code = status.as_u16();
+    if outcome_envelopes
+        && (code == 403 || code == 429)
+        && let Ok(CtfdResponse {
+            success: true,
+            data: Some(data),
+            ..
+        }) = parsed
+    {
+        return Ok(data);
+    }
+
+    let headline = match code {
+        401 | 403 => Some("Unauthorized — check that your API token is valid.".to_string()),
+        429 => Some("Rate limited by the CTFd server (HTTP 429).".to_string()),
+        _ if status.is_client_error() => Some(format!("API request failed with status {code}")),
+        _ if status.is_server_error() => Some(format!("CTFd server error (HTTP {code})")),
+        _ => None,
+    };
+    if let Some(headline) = headline {
+        return Err(CtfdError::Api(dump.render(&headline)));
+    }
+
+    let envelope = parsed.map_err(|e| {
+        CtfdError::Parse(dump.render(&format!("Invalid or unexpected response format: {e}")))
+    })?;
+
+    if !envelope.success {
+        return Err(CtfdError::Api(dump.render(&format!(
+            "API returned an error: {}",
+            envelope.error_message()
+        ))));
+    }
+
+    envelope
+        .data
+        .ok_or_else(|| CtfdError::Parse(dump.render("Response is missing the 'data' field.")))
+}
+
+/// Maximum number of body lines shown in an error.
+const DUMP_MAX_LINES: usize = 20;
+/// Maximum characters per body line shown in an error.
+const DUMP_MAX_LINE_CHARS: usize = 160;
+
+/// Everything needed to show an unexpected response to the user.
+///
+/// Never contains the API token: it is sent only in a request header,
+/// which is not included.
+struct ResponseDump<'a> {
+    method: &'a str,
+    url: &'a str,
+    final_url: &'a str,
+    status: reqwest::StatusCode,
+    content_type: Option<&'a str>,
+    body: &'a str,
+}
+
+impl ResponseDump<'_> {
+    /// Render `headline` followed by request/response details and the body
+    /// in a framed block.
+    fn render(&self, headline: &str) -> String {
+        let mut out = format!("{headline}\n\n  Request:  {} {}", self.method, self.url);
+        if self.final_url != self.url {
+            out.push_str(&format!("\n  Redirect: → {}", self.final_url));
+        }
+        out.push_str(&format!("\n  Response: HTTP {}", self.status));
+        if let Some(ct) = self.content_type {
+            out.push_str(&format!(", {ct}"));
+        }
+        out.push_str(&format!(", {} bytes", self.body.len()));
+
+        let pretty = serde_json::from_str::<serde_json::Value>(self.body)
+            .ok()
+            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+            .unwrap_or_else(|| self.body.to_string());
+        let lines: Vec<&str> = pretty.trim().lines().collect();
+
+        if lines.is_empty() {
+            out.push_str("\n  Body:     (empty)");
+        } else {
+            let note = if lines.len() > DUMP_MAX_LINES {
+                format!(" (first {DUMP_MAX_LINES} of {} lines)", lines.len())
+            } else {
+                String::new()
+            };
+            out.push_str(&format!("\n  ╭─ response body{note}"));
+            for line in lines.iter().take(DUMP_MAX_LINES) {
+                out.push_str("\n  │ ");
+                out.push_str(&sanitize_line(line));
+            }
+            if lines.len() > DUMP_MAX_LINES {
+                out.push_str("\n  │ …");
+            }
+            out.push_str("\n  ╰─");
+        }
+
+        if let Some(hint) = self.hint() {
+            out.push_str(&format!("\n  Hint: {hint}"));
+        }
+        out
+    }
+
+    fn hint(&self) -> Option<&'static str> {
+        let looks_html = self.content_type.is_some_and(|ct| ct.contains("html"))
+            || self.body.trim_start().starts_with('<');
+        if self.final_url.contains("/login") {
+            Some(
+                "create a new token in CTFd under Settings → Access Tokens and run \
+                 `ctfdc init <url>` again.",
+            )
+        } else if matches!(self.status.as_u16(), 401 | 403) {
+            Some("check the token (CTFd → Settings → Access Tokens); `ctfdc init` updates it.")
+        } else if self.status.is_server_error() {
+            Some("the CTFd server is struggling; try again in a moment.")
+        } else if looks_html {
+            Some(
+                "the server sent an HTML page, not CTFd API JSON. Make sure the URL is the \
+                 CTFd root (e.g. https://ctf.example.com) and that no proxy or browser \
+                 check (e.g. Cloudflare) sits in front of the API.",
+            )
+        } else {
+            None
+        }
+    }
+}
+
+/// Make a body line safe to print: replace control characters (which could
+/// carry terminal escape sequences), expand tabs, and truncate.
+fn sanitize_line(line: &str) -> String {
+    let mut out = String::new();
+    for (count, c) in line.chars().enumerate() {
+        if count >= DUMP_MAX_LINE_CHARS {
+            out.push('…');
+            break;
+        }
+        match c {
+            '\t' => out.push_str("    "),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Whether an HTTP status is worth retrying for an idempotent request.
@@ -350,4 +439,70 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
         .parse()
         .ok()?;
     Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dump<'a>(
+        status: u16,
+        ct: Option<&'a str>,
+        final_url: &'a str,
+        body: &'a str,
+    ) -> ResponseDump<'a> {
+        ResponseDump {
+            method: "GET",
+            url: "https://ctf.example.com/api/v1/users/me",
+            final_url,
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            content_type: ct,
+            body,
+        }
+    }
+
+    #[test]
+    fn renders_html_body_in_frame_with_redirect_and_hint() {
+        let html = "<!DOCTYPE html>\n<html>\n<title>Login</title>\n</html>";
+        let out = dump(
+            200,
+            Some("text/html"),
+            "https://ctf.example.com/login?next=x",
+            html,
+        )
+        .render("Headline");
+        assert!(out.starts_with("Headline\n"));
+        assert!(out.contains("Request:  GET https://ctf.example.com/api/v1/users/me"));
+        assert!(out.contains("Redirect: → https://ctf.example.com/login?next=x"));
+        assert!(out.contains("HTTP 200 OK, text/html"));
+        assert!(out.contains("╭─ response body"));
+        assert!(out.contains("│ <!DOCTYPE html>"));
+        assert!(out.contains("Hint: create a new token"));
+    }
+
+    #[test]
+    fn pretty_prints_json_and_truncates() {
+        let body = r#"{"message":"Your access token is invalid"}"#;
+        let url = "https://ctf.example.com/api/v1/users/me";
+        let out = dump(401, Some("application/json"), url, body).render("H");
+        assert!(out.contains("│   \"message\": \"Your access token is invalid\""));
+        assert!(!out.contains("Redirect:"));
+
+        let long: String = (0..50).map(|i| format!("line {i}\n")).collect();
+        let out = dump(200, None, url, &long).render("H");
+        assert!(out.contains("(first 20 of 50 lines)"));
+        assert!(out.contains("│ line 19"));
+        assert!(!out.contains("│ line 20"));
+    }
+
+    #[test]
+    fn strips_terminal_escapes_and_handles_empty_body() {
+        assert_eq!(sanitize_line("a\x1b[31mred"), "a?[31mred");
+        let url = "https://ctf.example.com/api/v1/users/me";
+        assert!(
+            dump(500, None, url, "")
+                .render("H")
+                .contains("Body:     (empty)")
+        );
+    }
 }

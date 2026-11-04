@@ -3,9 +3,9 @@ use predicates::prelude::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Get a command for the ctfd-client binary.
+/// Get a command for the ctfdc binary.
 fn ctfd() -> Command {
-    Command::cargo_bin("ctfd-client").expect("ctfd-client binary should exist")
+    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
 }
 
 /// Return a standard multi-category challenge fixture JSON.
@@ -898,7 +898,7 @@ async fn shows_progress_and_ids() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Solved 1/3 challenges · 100/600 pts",
+            "Solved 1/3 challenges, 100/600 pts",
         ))
         .stdout(predicate::str::contains("Web (1/2)"))
         .stdout(predicate::str::contains("[ ] #12  SQL Injection (200 pts)"))
