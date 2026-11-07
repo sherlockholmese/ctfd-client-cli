@@ -179,6 +179,17 @@ cutoff = 20
 
 `ctfdc init <url> --cutoff 20` writes it for you, and `ctfdc lb --cutoff N` overrides it for one run. `qualify = 20` is accepted as a synonym.
 
+### Counting points from a set time
+
+To rank teams only on points scored from a given moment (for example, a second day or a finals round), set `since` in `ctfd.toml`. Solves and awards before that time are ignored and the scoreboard is re-ranked (live view, graph, Analysis and `--print`):
+
+```toml
+since = 2026-11-07T09:00:00+08:00   # without an offset it is local time
+# since = "2026-11-07 09:00"         # strings and Unix seconds work too
+```
+
+`ctfdc lb --since '2026-11-07 09:00'` overrides it for one run. Ties go to whoever reached the score first, as on CTFd. The re-ranked board is computed from `/api/v1/scoreboard/top/N`, so only accounts CTFd lists on the scoreboard are included.
+
 ## Test / Validation
 
 Run the standard checks:

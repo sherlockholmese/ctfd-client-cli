@@ -987,3 +987,111 @@ async fn invalid_qualify_is_reported() {
         .failure()
         .stderr(predicate::str::contains("invalid cutoff value"));
 }
+
+// ============================================================================
+// `since`: ignore points scored before a given time
+// ============================================================================
+
+async fn mount_since_board(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": [
+                {"pos": 1, "name": "Early Birds", "score": 600, "account_id": 1, "account_type": "team"},
+                {"pos": 2, "name": "Late Night", "score": 300, "account_id": 2, "account_type": "team"}
+            ]
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/scoreboard/top/2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true,
+            "data": {
+                "1": {"id": 1, "name": "Early Birds", "solves": [
+                    {"challenge_id": 1, "value": 500, "date": "2026-11-07T08:00:00Z"},
+                    {"challenge_id": 2, "value": 100, "date": "2026-11-07T10:00:00Z"}
+                ]},
+                "2": {"id": 2, "name": "Late Night", "solves": [
+                    {"challenge_id": 3, "value": 300, "date": "2026-11-07T11:00:00+00:00"}
+                ]}
+            }
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+fn rows(stdout: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter(|l| l.contains("Early Birds") || l.contains("Late Night"))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
+#[tokio::test]
+async fn since_flag_ignores_earlier_points_and_reranks() {
+    let server = MockServer::start().await;
+    mount_since_board(&server).await;
+
+    let output = ctfd()
+        .args(["--url", &server.uri(), "--token", "t"])
+        .args(["lb", "--plain", "--since", "2026-11-07T09:00:00Z"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Counting points scored since"));
+    assert_eq!(
+        rows(&output.stdout),
+        vec!["1 Late Night 300", "2 Early Birds 100 200"]
+    );
+}
+
+#[tokio::test]
+async fn since_in_ctfd_toml_is_used() {
+    let server = MockServer::start().await;
+    mount_since_board(&server).await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("ctfd.toml"),
+        format!(
+            "url = \"{}\"\ntoken = \"t\"\nsince = 2026-11-07T09:00:00Z\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let output = ctfd()
+        .args(["lb", "--plain"])
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        rows(&output.stdout),
+        vec!["1 Late Night 300", "2 Early Birds 100 200"]
+    );
+}
+
+#[test]
+fn invalid_since_in_ctfd_toml_is_reported() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("ctfd.toml"),
+        "url = \"http://127.0.0.1:9\"\ntoken = \"t\"\nsince = \"yesterday-ish\"\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .args(["lb", "--plain"])
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(temp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid since value"));
+}

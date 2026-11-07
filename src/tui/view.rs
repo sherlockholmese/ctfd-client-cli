@@ -258,7 +258,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     const KEY_W: usize = 15;
-    let rows: [(&str, &str); 16] = [
+    let rows: [(&str, &str); 17] = [
         ("Tab, 1, 2", "Switch Board / Analysis"),
         ("↑/↓, j/k", "Move selection or catch-up list"),
         ("PgUp/PgDn", "Move ten rows"),
@@ -275,6 +275,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("", ""),
         ("Update rate", "lb -n SECS"),
         ("Cut-off", "cutoff = N in ctfd.toml"),
+        ("Count from", "since = TIME in ctfd.toml"),
     ];
     let content_w = rows
         .iter()

@@ -21,7 +21,9 @@ use std::time::Duration;
 
 /// Where scoreboard data comes from.
 enum Source {
-    Live(CtfdClient),
+    /// A CTFd server; with `since`, only points scored at or after that
+    /// Unix time count.
+    Live(CtfdClient, Option<i64>),
     Demo(Box<demo::DemoWorld>),
 }
 
@@ -32,7 +34,7 @@ impl Source {
                 world.tick(series::now());
                 Ok(world.snapshot(top_n, accounts))
             }
-            Source::Live(client) => {
+            Source::Live(client, None) => {
                 let (standings, top, challenges) = tokio::join!(
                     client.get_leaderboard(),
                     client.get_scoreboard_top(top_n),
@@ -54,6 +56,29 @@ impl Source {
                 }
                 Ok(data)
             }
+            Source::Live(client, Some(since)) => {
+                let since = *since;
+                let (board, challenges) = tokio::join!(
+                    crate::commands::leaderboard::fetch_standings(client, Some(since)),
+                    client.get_challenges(),
+                );
+                let (standings, history) = board?;
+                let kind = AccountKind::from_standings(&standings);
+                let mut top = history.unwrap_or_default();
+                top.truncate(top_n as usize);
+                let mut data = Data {
+                    standings,
+                    top,
+                    challenges: challenges.unwrap_or_default(),
+                    accounts: Default::default(),
+                };
+                for &id in accounts {
+                    if let Ok(solves) = client.get_account_solves(kind.path(), id).await {
+                        data.accounts.insert(id, solves_since(solves, since));
+                    }
+                }
+                Ok(data)
+            }
         }
     }
 
@@ -64,9 +89,24 @@ impl Source {
     ) -> Result<Vec<crate::models::AccountSolve>, CtfdError> {
         match self {
             Source::Demo(world) => Ok(world.account(id)),
-            Source::Live(client) => client.get_account_solves(kind.path(), id).await,
+            Source::Live(client, since) => {
+                let solves = client.get_account_solves(kind.path(), id).await?;
+                Ok(match since {
+                    Some(since) => solves_since(solves, *since),
+                    None => solves,
+                })
+            }
         }
     }
+}
+
+/// Keep only the solves made at or after `since` (Unix seconds).
+fn solves_since(
+    mut solves: Vec<crate::models::AccountSolve>,
+    since: i64,
+) -> Vec<crate::models::AccountSolve> {
+    solves.retain(|s| series::parse_time(&s.date).is_some_and(|t| t >= since));
+    solves
 }
 
 fn host_of(url: &str) -> String {
@@ -90,7 +130,7 @@ pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Resul
     ensure_terminal()?;
     let client = CtfdClient::new(&config);
     let me = client.get_me().await.ok();
-    let mut source = Source::Live(client);
+    let mut source = Source::Live(client, args.since);
     let data = source.fetch(args.top, &[]).await?;
     let kind = AccountKind::from_standings(&data.standings);
     let me_account = me.as_ref().and_then(|m| match kind {
@@ -101,16 +141,14 @@ pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Resul
         AccountKind::Users => me.map(|m| m.name),
         AccountKind::Teams => None,
     };
-    start(
-        source,
-        host_of(&config.base_url),
-        false,
-        &args,
-        me_account,
-        me_name,
-        data,
-    )
-    .await
+    let mut host = host_of(&config.base_url);
+    if let Some(since) = args.since {
+        host = format!(
+            "{host}   since {}",
+            crate::commands::leaderboard::format_since(since)
+        );
+    }
+    start(source, host, false, &args, me_account, me_name, data).await
 }
 
 /// Run the live scoreboard on fictional, simulated data.
