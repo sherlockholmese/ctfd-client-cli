@@ -186,3 +186,29 @@ async fn init_saves_cutoff_and_keeps_it_on_rerun() {
         toml::from_str(&std::fs::read_to_string(temp.path().join("ctfd.toml")).unwrap()).unwrap();
     assert_eq!(table["cutoff"].as_integer(), Some(20));
 }
+
+#[tokio::test]
+async fn init_rerun_keeps_since() {
+    let server = MockServer::start().await;
+    mount_me(&server, "tok").await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("ctfd.toml"),
+        "url = \"http://old\"\ntoken = \"old\"\nsince = 2026-11-07T09:00:00Z\n",
+    )
+    .unwrap();
+
+    ctfd()
+        .args(["init", &server.uri(), "--token", "tok"])
+        .current_dir(temp.path())
+        .assert()
+        .success();
+
+    let table: toml::Table =
+        toml::from_str(&std::fs::read_to_string(temp.path().join("ctfd.toml")).unwrap()).unwrap();
+    assert_eq!(table["token"].as_str(), Some("tok"));
+    assert_eq!(
+        table["since"].as_datetime().map(|d| d.to_string()),
+        Some("2026-11-07T09:00:00Z".to_string())
+    );
+}

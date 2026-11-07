@@ -125,6 +125,8 @@ Examples:
   ctfdc lb -n 5            Refresh every 5 seconds
   ctfdc lb --top 5         Graph the top 5
   ctfdc lb --cutoff 10     Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
+  ctfdc lb --since '2026-11-07 09:00'
+                           Only count points scored from then on (or set since in ctfd.toml)
   ctfdc lb --plain         Print once as text (also used when piped)
   ctfdc lb --demo          Try the live view on fictional data
 
@@ -191,6 +193,12 @@ pub struct LeaderboardArgs {
         value_parser = clap::value_parser!(u32).range(1..)
     )]
     pub cutoff: Option<u32>,
+
+    /// Only count points scored at or after this time, re-ranking the
+    /// scoreboard (RFC 3339, `YYYY-MM-DD HH:MM[:SS]` in local time, or Unix
+    /// seconds) [default: `since` in ctfd.toml]
+    #[arg(long = "since", value_name = "TIME", value_parser = parse_since_arg)]
+    pub since: Option<i64>,
 
     /// Open the live view on fictional, simulated data (no server needed)
     #[arg(long, conflicts_with = "plain")]
@@ -335,6 +343,11 @@ pub enum ConfigError {
         "Configuration file ctfd.toml has an invalid cutoff value (expected a whole number such as `cutoff = 20`)."
     )]
     TomlInvalidQualify,
+    /// `ctfd.toml` has a `since` value that is not a recognisable time.
+    #[error(
+        "Configuration file ctfd.toml has an invalid since value (expected a time such as `since = 2026-11-07T09:00:00+08:00` or `since = \"2026-11-07 09:00\"`)."
+    )]
+    TomlInvalidSince,
     /// `ctfd.toml` exists but could not be read (permissions, etc.).
     #[error("Configuration file ctfd.toml could not be read: {0}")]
     TomlReadError(String),
@@ -414,9 +427,9 @@ fn non_empty(value: &Option<String>, empty: ConfigError) -> Result<Option<String
     }
 }
 
-/// Read the optional qualifying line (the top N places qualify) from the
-/// nearest `ctfd.toml`: `cutoff = N`, or its synonym `qualify = N`.
-pub fn workspace_qualify() -> Result<Option<u32>, ConfigError> {
+/// Parse the nearest `ctfd.toml`, if any (an empty file reads as an empty
+/// table).
+fn workspace_table() -> Result<Option<toml::Table>, ConfigError> {
     let Some(path) = TOML_SEARCH_PATHS
         .iter()
         .map(std::path::Path::new)
@@ -429,7 +442,17 @@ pub fn workspace_qualify() -> Result<Option<u32>, ConfigError> {
     if content.trim().is_empty() {
         return Ok(None);
     }
-    let table: toml::Table = toml::from_str(&content).map_err(|_| ConfigError::TomlMalformed)?;
+    toml::from_str(&content)
+        .map(Some)
+        .map_err(|_| ConfigError::TomlMalformed)
+}
+
+/// Read the optional qualifying line (the top N places qualify) from the
+/// nearest `ctfd.toml`: `cutoff = N`, or its synonym `qualify = N`.
+pub fn workspace_qualify() -> Result<Option<u32>, ConfigError> {
+    let Some(table) = workspace_table()? else {
+        return Ok(None);
+    };
     match table.get("cutoff").or_else(|| table.get("qualify")) {
         None => Ok(None),
         Some(toml::Value::Integer(n)) if *n >= 1 && *n <= i64::from(u32::MAX) => {
@@ -437,6 +460,70 @@ pub fn workspace_qualify() -> Result<Option<u32>, ConfigError> {
         }
         Some(_) => Err(ConfigError::TomlInvalidQualify),
     }
+}
+
+/// Read the optional scoring start time from the nearest `ctfd.toml`:
+/// `since = ...`.  Points scored before it are ignored on the scoreboard.
+///
+/// Accepts a TOML date-time (`since = 2026-11-07T09:00:00+08:00`; without
+/// an offset it is local time), a string in any form [`parse_since`]
+/// understands, or Unix seconds.  Returns Unix seconds.
+pub fn workspace_since() -> Result<Option<i64>, ConfigError> {
+    let Some(table) = workspace_table()? else {
+        return Ok(None);
+    };
+    match table.get("since") {
+        None => Ok(None),
+        Some(toml::Value::Integer(n)) => Ok(Some(*n)),
+        Some(toml::Value::String(s)) => parse_since(s)
+            .map(Some)
+            .ok_or(ConfigError::TomlInvalidSince),
+        Some(toml::Value::Datetime(dt)) => parse_since(&dt.to_string())
+            .map(Some)
+            .ok_or(ConfigError::TomlInvalidSince),
+        Some(_) => Err(ConfigError::TomlInvalidSince),
+    }
+}
+
+/// Parse a scoring start time into Unix seconds.
+///
+/// Accepts RFC 3339 (`2026-11-07T09:00:00Z`, `...+08:00`), a date and time
+/// without an offset in local time (`2026-11-07 09:00`,
+/// `2026-11-07T09:00:00`), a bare date (local midnight), or Unix seconds.
+pub fn parse_since(raw: &str) -> Option<i64> {
+    use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
+    let raw = raw.trim();
+    if let Ok(n) = raw.parse::<i64>() {
+        return Some(n);
+    }
+    if let Ok(t) = DateTime::parse_from_rfc3339(raw) {
+        return Some(t.timestamp());
+    }
+    let naive = [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ]
+    .iter()
+    .find_map(|fmt| NaiveDateTime::parse_from_str(raw, fmt).ok())
+    .or_else(|| {
+        NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+            .ok()
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+    })?;
+    Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .map(|t| t.timestamp())
+}
+
+fn parse_since_arg(raw: &str) -> Result<i64, String> {
+    parse_since(raw).ok_or_else(|| {
+        "expected a time such as 2026-11-07T09:00:00+08:00, '2026-11-07 09:00' (local), \
+         or Unix seconds"
+            .to_string()
+    })
 }
 
 /// Find the nearest workspace directory (one containing `ctfd.toml`).
@@ -501,6 +588,18 @@ mod tests {
 
     /// Global lock to prevent concurrent env var manipulation in tests.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn parses_since_times() {
+        assert_eq!(parse_since("1970-01-01T00:01:00Z"), Some(60));
+        assert_eq!(parse_since("1970-01-01T08:01:00+08:00"), Some(60));
+        assert_eq!(parse_since(" 1700000000 "), Some(1_700_000_000));
+        // Offset-less forms are local time; they all agree with each other.
+        let local = parse_since("2026-11-07 09:00").unwrap();
+        assert_eq!(parse_since("2026-11-07T09:00:00"), Some(local));
+        assert_eq!(parse_since("2026-11-07 00:00"), parse_since("2026-11-07"));
+        assert_eq!(parse_since("soon"), None);
+    }
 
     /// Helper: set env vars, create GlobalArgs, resolve, then clean up.
     ///

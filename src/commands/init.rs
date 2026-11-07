@@ -175,7 +175,12 @@ fn prompt_token(url: &str, existing: Option<String>) -> anyhow::Result<String> {
 }
 
 fn write_config(path: &Path, url: &str, token: &str, cutoff: Option<u32>) -> anyhow::Result<()> {
-    let mut table = toml::Table::new();
+    // Keep other settings (e.g. `since`) from an existing, valid file.
+    let mut table = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|c| toml::from_str::<toml::Table>(&c).ok())
+        .unwrap_or_default();
+    table.remove("qualify");
     table.insert("url".into(), toml::Value::String(url.into()));
     table.insert("token".into(), toml::Value::String(token.into()));
     if let Some(n) = cutoff {
