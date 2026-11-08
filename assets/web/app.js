@@ -216,6 +216,7 @@
     if (state.snap) render();
     requestAnimationFrame(() => {
       progress.chart?.resize();
+      radar.chart?.resize();
     });
   }
   tabs.forEach((t, i) => {
@@ -582,37 +583,109 @@
     if (row) row.classList.toggle("is-linked", on);
   }
 
-  // Points by category, worst gap first: where the rival out-scores you.
-  function renderCategoryTable() {
+  // Points by category as a radar: each spoke is the share of that
+  // category's points you (and the rival) hold, so big and small
+  // categories read on the same scale. The tooltip carries the raw numbers.
+  const radar = { chart: null };
+
+  function renderCategoryChart() {
     const h = state.snap.h2h;
     const rival = h.rival;
-    const theirsKnown = rival && !h.rival_loading;
-    const th = $("th-cat-rival");
-    th.textContent = rival ? rival.name : "Rival";
-    th.title = rival ? rival.name : "";
-    const rows = h.categories
-      .filter((c) => c.total > 0)
-      .map((c) => ({ ...c, gap: c.mine_points - c.theirs_points }))
-      .sort((a, b) => (theirsKnown ? a.gap - b.gap : 0) || b.total_points - a.total_points);
-    const pts = (points, n, total) =>
-      el("td", { class: "num" }, el("span", { text: num(points) }), el("span", { class: "sub", text: `${n}/${total}` }));
-    replace(
-      $("cat-body"),
-      rows.map((c) =>
-        el(
-          "tr",
-          null,
-          el("td", { class: "cat-name", text: c.category || "Uncategorized" }),
-          pts(c.mine_points, c.mine, c.total),
-          theirsKnown ? pts(c.theirs_points, c.theirs, c.total) : el("td", { class: "num muted", text: "—" }),
-          el("td", {
-            class: `num ${!theirsKnown || !c.gap ? "muted" : c.gap > 0 ? "delta-up" : "delta-down"}`,
-            text: theirsKnown ? signed(c.gap) || "0" : "—",
-          }),
-        ),
-      ),
+    const theirsKnown = !!rival && !h.rival_loading;
+    const cats = h.categories
+      .filter((c) => c.total_points > 0)
+      .sort((a, b) => b.total_points - a.total_points || a.category.localeCompare(b.category));
+    const node = $("cat-chart");
+    const enough = cats.length >= 3;
+    $("cat-empty").hidden = enough;
+    $("cat-empty").textContent = cats.length ? "Needs at least three categories" : "Nothing yet";
+    node.hidden = !enough;
+    $("cat-legend").hidden = !enough;
+    if (!enough || typeof echarts === "undefined") return;
+    if (!radar.chart) radar.chart = makeChart(node);
+
+    const p = palette();
+    const meColor = p.fg;
+    const rivalColor = p.series[0];
+    const share = (pts, c) => (c.total_points > 0 ? Math.round((pts / c.total_points) * 1000) / 10 : 0);
+    const label = (c) => c.category || "Uncategorized";
+
+    node.setAttribute(
+      "aria-label",
+      cats
+        .map((c) => `${label(c)}: you ${num(c.mine_points)}${theirsKnown ? `, ${rival.name} ${num(c.theirs_points)}` : ""} of ${num(c.total_points)}`)
+        .join("; "),
     );
-    $("cat-empty").hidden = rows.length > 0;
+    replace($("cat-legend"), [
+      el("li", { class: "legend-item legend-static" }, el("span", { class: "swatch", style: `background:${meColor}` }), el("span", { text: "You" })),
+      theirsKnown
+        ? el("li", { class: "legend-item legend-static" }, el("span", { class: "swatch", style: `background:${rivalColor}` }), el("span", { text: rival.name, title: rival.name }))
+        : null,
+    ].filter(Boolean));
+
+    const tip = () => {
+      const head = `<tr><th>Category</th><th>You</th>${theirsKnown ? `<th>${escapeHtml(rival.name)}</th><th>Gap</th>` : "<th>Of</th>"}</tr>`;
+      const rows = [...cats]
+        .map((c) => ({ c, gap: c.mine_points - c.theirs_points }))
+        .sort((x, y) => (theirsKnown ? x.gap - y.gap : 0) || y.c.total_points - x.c.total_points)
+        .map(({ c, gap }) => {
+          const mine = `${num(c.mine_points)}<span class="sub">${c.mine}/${c.total}</span>`;
+          const rest = theirsKnown
+            ? `<td>${num(c.theirs_points)}<span class="sub">${c.theirs}/${c.total}</span></td><td class="${gap > 0 ? "delta-up" : gap < 0 ? "delta-down" : "muted"}">${signed(gap) || "0"}</td>`
+            : `<td class="muted">${num(c.total_points)}</td>`;
+          return `<tr><td>${escapeHtml(label(c))}</td><td>${mine}</td>${rest}</tr>`;
+        })
+        .join("");
+      return `<div class="chart-tip chart-tip-wide"><table class="chart-tip-table">${head}${rows}</table></div>`;
+    };
+
+    const area = (color, alpha) => ({ color: hexAlpha(color, alpha) });
+    const series = [];
+    if (theirsKnown) {
+      series.push({
+        name: rival.name,
+        value: cats.map((c) => share(c.theirs_points, c)),
+        symbol: "circle",
+        symbolSize: 5,
+        itemStyle: { color: rivalColor },
+        lineStyle: { color: rivalColor, width: 2 },
+        areaStyle: area(rivalColor, 0.18),
+      });
+    }
+    series.push({
+      name: "You",
+      value: cats.map((c) => share(c.mine_points, c)),
+      symbol: "circle",
+      symbolSize: 5,
+      z: 3,
+      itemStyle: { color: meColor },
+      lineStyle: { color: meColor, width: 2.5 },
+      areaStyle: area(meColor, themeName() === "dark" ? 0.14 : 0.08),
+    });
+
+    radar.chart.setOption(
+      {
+        animationDuration: 500,
+        animationDurationUpdate: 300,
+        textStyle: baseText(),
+        tooltip: { ...tooltipFrame(), trigger: "item", formatter: tip },
+        radar: {
+          center: ["50%", "52%"],
+          radius: "68%",
+          startAngle: 90,
+          splitNumber: 4,
+          shape: "polygon",
+          indicator: cats.map((c) => ({ name: label(c), max: 100, min: 0 })),
+          axisName: { color: p.muted, fontSize: 12, fontFamily: baseText().fontFamily },
+          axisNameGap: 8,
+          axisLine: { lineStyle: { color: p.axis } },
+          splitLine: { lineStyle: { color: p.grid } },
+          splitArea: { show: false },
+        },
+        series: [{ type: "radar", data: series, emphasis: { lineStyle: { width: 3 } } }],
+      },
+      { notMerge: true },
+    );
   }
 
   function rerenderCharts() {
@@ -1159,7 +1232,7 @@
     replace($("field-body"), fieldRows);
     $("field-empty").hidden = fieldRows.length > 0;
 
-    renderCategoryTable();
+    renderCategoryChart();
   }
 
   // ------------------------------------------------------------ render

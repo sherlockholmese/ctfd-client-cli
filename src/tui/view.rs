@@ -4,9 +4,10 @@ use super::app::{App, BoardLayout, Momentum, View};
 use super::theme;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::canvas::{Canvas, Context, Line as CanvasLine};
 use ratatui::widgets::{
     Axis, Block, Cell, Chart, Clear, Dataset, GraphType, HighlightSpacing, LegendPosition,
     Paragraph, Row, Table, Wrap,
@@ -678,7 +679,7 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
     // Pts, Solves, Top N, Category, Challenge, Running + spacing.
     let left_w = 6 + 6 + 7 + 11 + name_w + 8 + 2 * 5;
     let side_stack = |f: &mut Frame, side: Rect, app: &mut App| {
-        let cats_h = app.board.h2h.comparison.categories.len() as u16 + 3;
+        let cats_h = RADAR_HEIGHT.max(app.board.h2h.comparison.categories.len() as u16 + 3);
         let [h2h, _, cats, _, edge] = Layout::vertical([
             Constraint::Length(8),
             Constraint::Length(1),
@@ -992,6 +993,12 @@ fn render_catch_up(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
     *app.catch_state.offset_mut() = state.offset();
 }
 
+/// Rows the category radar wants (title, chart, legend, gap line).
+const RADAR_HEIGHT: u16 = 18;
+
+/// Points by category as a radar: each spoke is the share of that
+/// category's points held, so big and small categories share one scale.
+/// Falls back to a table when there are too few spokes or too little room.
 fn render_categories(f: &mut Frame, area: Rect, app: &App) {
     let inner = titled(f, area, "Points by category");
     let cats = &app.board.h2h.comparison.categories;
@@ -999,6 +1006,156 @@ fn render_categories(f: &mut Frame, area: Rect, app: &App) {
         note(f, inner, "Challenges aren't visible yet.");
         return;
     }
+    let spokes: Vec<_> = cats.iter().filter(|c| c.total_points > 0).collect();
+    if spokes.len() < 3 || inner.height < 10 || inner.width < 30 {
+        render_category_table(f, inner, app);
+        return;
+    }
+    let h = &app.board.h2h;
+    let rival = h.rival.as_ref().filter(|_| !h.rival_loading);
+    let rival_color = theme::series(1);
+
+    let [chart, legend, gap] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    // One x unit per column and two y units per row keeps the grid round,
+    // since a terminal cell is about twice as tall as it is wide.
+    let half_w = f64::from(chart.width) / 2.0;
+    let half_h = f64::from(chart.height);
+    let label_w = 10;
+    let radius = (half_w - label_w as f64 - 1.0).min(half_h - 2.0).max(2.0);
+    let n = spokes.len();
+    let angle =
+        |i: usize| std::f64::consts::FRAC_PI_2 - i as f64 * std::f64::consts::TAU / n as f64;
+    let at = |i: usize, r: f64| (r * angle(i).cos(), r * angle(i).sin());
+    let share = |pts: i64, total: i64| (pts as f64 / total as f64).clamp(0.0, 1.0);
+    let mine: Vec<f64> = spokes
+        .iter()
+        .map(|c| share(c.mine_points, c.total_points))
+        .collect();
+    let theirs: Vec<f64> = spokes
+        .iter()
+        .map(|c| share(c.theirs_points, c.total_points))
+        .collect();
+
+    let canvas = Canvas::default()
+        .marker(Marker::Braille)
+        .x_bounds([-half_w, half_w])
+        .y_bounds([-half_h, half_h])
+        .paint(|ctx| {
+            let grid = Color::DarkGray;
+            let polygon = |ctx: &mut Context, values: &dyn Fn(usize) -> f64, color: Color| {
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    let (x1, y1) = at(i, radius * values(i));
+                    let (x2, y2) = at(j, radius * values(j));
+                    ctx.draw(&CanvasLine::new(x1, y1, x2, y2, color));
+                }
+            };
+            polygon(ctx, &|_| 1.0, grid);
+            for i in 0..n {
+                let (x, y) = at(i, radius);
+                ctx.draw(&CanvasLine::new(0.0, 0.0, x, y, grid));
+            }
+            ctx.layer();
+            if rival.is_some() {
+                polygon(ctx, &|i| theirs[i], rival_color);
+                ctx.layer();
+            }
+            polygon(ctx, &|i| mine[i], Color::Reset);
+            for (i, c) in spokes.iter().enumerate() {
+                let name = fit(&c.category, label_w);
+                let w = name
+                    .chars()
+                    .map(|ch| ch.width().unwrap_or(0))
+                    .sum::<usize>() as f64;
+                let (dx, dy) = (angle(i).cos(), angle(i).sin());
+                let (x, y) = at(i, radius + 1.0);
+                let x = if dx > 0.3 {
+                    x + 1.0
+                } else if dx < -0.3 {
+                    x - w - 1.0
+                } else {
+                    x - w / 2.0
+                };
+                let y = y + dy.signum() * if dy.abs() > 0.3 { 1.0 } else { 0.0 };
+                ctx.print(x, y, Span::styled(name, theme::category(&c.category)));
+            }
+        });
+    f.render_widget(canvas, chart);
+
+    let mut keys = vec![
+        Span::styled("━ ", Style::new().add_modifier(Modifier::BOLD)),
+        Span::styled("You", theme::you()),
+    ];
+    if let Some(r) = rival {
+        keys.push(Span::raw("   "));
+        keys.push(Span::styled("━ ", Style::new().fg(rival_color)));
+        keys.push(Span::raw(fit(&r.name, 24)));
+    }
+    keys.push(Span::styled("   share of pts", theme::muted()));
+    f.render_widget(Line::from(keys).centered(), legend);
+
+    let summary = match rival {
+        Some(_) => {
+            let worst = spokes
+                .iter()
+                .min_by_key(|c| c.delta())
+                .filter(|c| c.delta() < 0);
+            let best = spokes
+                .iter()
+                .max_by_key(|c| c.delta())
+                .filter(|c| c.delta() > 0);
+            let mut parts = Vec::new();
+            if let Some(c) = worst {
+                parts.push(Span::styled("Behind most: ", theme::muted()));
+                parts.push(Span::styled(
+                    fit(&c.category, 12),
+                    theme::category(&c.category),
+                ));
+                parts.push(Span::styled(
+                    format!(" {}", signed_pts(c.delta())),
+                    theme::negative(),
+                ));
+            }
+            if let Some(c) = best {
+                if !parts.is_empty() {
+                    parts.push(Span::raw("  "));
+                }
+                parts.push(Span::styled("Ahead: ", theme::muted()));
+                parts.push(Span::styled(
+                    fit(&c.category, 12),
+                    theme::category(&c.category),
+                ));
+                parts.push(Span::styled(
+                    format!(" {}", signed_pts(c.delta())),
+                    theme::positive(),
+                ));
+            }
+            if parts.is_empty() {
+                parts.push(Span::styled("Level in every category", theme::muted()));
+            }
+            Line::from(parts)
+        }
+        None => {
+            let (got, of) = spokes
+                .iter()
+                .fold((0, 0), |(g, o), c| (g + c.mine_points, o + c.total_points));
+            Line::from(vec![
+                Span::raw(pts(got)),
+                Span::styled(format!(" of {} pts", pts(of)), theme::muted()),
+            ])
+        }
+    };
+    f.render_widget(summary.centered(), gap);
+}
+
+fn render_category_table(f: &mut Frame, inner: Rect, app: &App) {
+    let cats = &app.board.h2h.comparison.categories;
     let has_rival = app.board.h2h.rival.is_some() && !app.board.h2h.rival_loading;
     let rows: Vec<Row> = cats
         .iter()

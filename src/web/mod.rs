@@ -32,7 +32,8 @@ use tokio_stream::wrappers::WatchStream;
 
 const INDEX_HTML: &str = include_str!("../../assets/web/index.html");
 const APP_CSS: &str = include_str!("../../assets/web/app.css");
-const APP_JS: &str = include_str!("../../assets/web/app.js");
+/// `assets/web/app.js`, minified by `build.rs`.
+const APP_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.min.js"));
 const ECHARTS_JS: &str = include_str!("../../assets/web/vendor/echarts.min.js");
 
 /// Header carrying the per-run key on API calls.

@@ -199,19 +199,10 @@
             <header class="card-header">
               <h2 class="card-title">Points by category</h2>
             </header>
-            <div class="table-scroll">
-              <table class="table table-compact">
-                <thead>
-                  <tr>
-                    <th scope="col">Category</th>
-                    <th class="num" scope="col">You</th>
-                    <th class="num th-rival" scope="col" id="th-cat-rival">Rival</th>
-                    <th class="num" scope="col">Gap</th>
-                  </tr>
-                </thead>
-                <tbody id="cat-body"></tbody>
-              </table>
+            <div class="card-content">
+              <div class="chart chart-radar" id="cat-chart" role="img" aria-label="Share of each category's points"></div>
               <p class="empty" id="cat-empty" hidden>Nothing yet</p>
+              <ul class="legend" id="cat-legend" aria-hidden="true"></ul>
             </div>
           </article>
 

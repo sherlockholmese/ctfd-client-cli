@@ -605,10 +605,18 @@ tr.closes td span {
   .swatch, .pop-bar > i { forced-color-adjust: none; }
 }
 
-/* Points by category. */
 .table-compact td { height: 34px; }
 .table .sub { display: inline-block; min-width: 4ch; margin-left: 8px; color: var(--muted-foreground); text-align: right; }
-.th-rival { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Points by category. */
+.chart-radar { height: 340px; }
+@media (max-width: 640px) { .chart-radar { height: 280px; } }
+.chart-tip-table { border-collapse: collapse; font-size: 12px; }
+.chart-tip-table th { font-weight: 500; color: var(--muted-foreground); text-align: right; padding: 0 0 4px 12px; }
+.chart-tip-table th:first-child, .chart-tip-table td:first-child { text-align: left; padding-left: 0; }
+.chart-tip-table td { padding: 2px 0 2px 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.chart-tip-table .sub { display: inline; min-width: 0; margin-left: 6px; color: var(--muted-foreground); }
+.chart-tip-wide { max-width: none; }
 
 /* Plan. */
 .plan-hero { padding: 20px 24px; }

@@ -174,7 +174,7 @@ The live view updates every 15 seconds (`-n SECS`), keeps the last good data on 
   - **Catch up**: challenges the rival solved and you haven't, most-solved first, with a running total and a line where you'd pass them.
   - **Open for both**: challenges neither of you has solved, ranked by how many of the top teams solved them.
   - **Head to head**: score, solves, points in the last hour / 3 hours, time since the last solve.
-  - **Points by category**: where the rival out-scores you.
+  - **Points by category**: a radar of the share of each category's points you and the rival hold, with the raw numbers on hover (web) and the biggest gaps underneath (terminal).
   - **Your edge**: challenges you have that they don't.
 - **Plan**: you against the whole board, for deciding what to work on next (`3` or `Tab` again).
   - **Best targets**: every challenge you haven't solved, ranked by expected points (points × the share of teams that solved it), with a running total and the rank you would reach, if nobody else scores.
