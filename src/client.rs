@@ -1,4 +1,6 @@
-use crate::config::ResolvedConfig;
+mod rctf;
+
+use crate::config::{Platform, ResolvedConfig};
 use crate::models::{
     AccountSolve, Challenge, ChallengeDetail, CtfdResponse, ScoreboardEntry, SubmitResponse,
     TopEntry, UserMe,
@@ -61,15 +63,19 @@ impl DenyKind {
     }
 }
 
-/// Authenticated CTFd API client.
+/// Authenticated CTF API client.
 ///
-/// Wraps a `reqwest` HTTP client and adds the `Authorization: Token <token>`
-/// header to every request. Never includes the token value in error output.
+/// Talks to CTFd directly; for rCTF ([`Platform::Rctf`]) every method maps
+/// the rCTF API onto the same CTFd-shaped models, so commands don't care
+/// which platform they run against.  Never includes a token in error
+/// output.
 #[derive(Clone)]
 pub struct CtfdClient {
     base_url: String,
     api_token: String,
     http: HttpClient,
+    platform: Platform,
+    rctf: std::sync::Arc<rctf::State>,
 }
 
 impl CtfdClient {
@@ -86,7 +92,13 @@ impl CtfdClient {
                 .read_timeout(Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| HttpClient::new()),
+            platform: config.platform,
+            rctf: Default::default(),
         }
+    }
+
+    fn is_rctf(&self) -> bool {
+        self.platform == Platform::Rctf
     }
 
     /// Build the full URL for an API path (base URL is already normalized).
@@ -106,6 +118,9 @@ impl CtfdClient {
 
     /// Fetch the scoreboard / leaderboard from the CTFd API.
     pub async fn get_leaderboard(&self) -> Result<Vec<ScoreboardEntry>, CtfdError> {
+        if self.is_rctf() {
+            return rctf::leaderboard(self).await;
+        }
         self.get::<Vec<ScoreboardEntry>>("/api/v1/scoreboard").await
     }
 
@@ -114,6 +129,9 @@ impl CtfdClient {
     /// CTFd keys the result by rank (`"1"`, `"2"`, ...); entries are
     /// returned in rank order.
     pub async fn get_scoreboard_top(&self, count: u32) -> Result<Vec<TopEntry>, CtfdError> {
+        if self.is_rctf() {
+            return rctf::top(self, count).await;
+        }
         let map = self
             .get::<std::collections::HashMap<String, TopEntry>>(&format!(
                 "/api/v1/scoreboard/top/{count}"
@@ -133,17 +151,26 @@ impl CtfdClient {
         kind: &str,
         account_id: u64,
     ) -> Result<Vec<AccountSolve>, CtfdError> {
+        if self.is_rctf() {
+            return rctf::account_solves(self, account_id).await;
+        }
         self.get::<Vec<AccountSolve>>(&format!("/api/v1/{kind}/{account_id}/solves"))
             .await
     }
 
     /// Fetch the authenticated user (used to verify a token).
     pub async fn get_me(&self) -> Result<UserMe, CtfdError> {
+        if self.is_rctf() {
+            return rctf::me(self).await;
+        }
         self.get::<UserMe>("/api/v1/users/me").await
     }
 
     /// Fetch the list of visible challenges from the CTFd API.
     pub async fn get_challenges(&self) -> Result<Vec<Challenge>, CtfdError> {
+        if self.is_rctf() {
+            return rctf::challenges(self).await;
+        }
         self.get::<Vec<Challenge>>("/api/v1/challenges").await
     }
 
@@ -152,6 +179,9 @@ impl CtfdClient {
         &self,
         challenge_id: u64,
     ) -> Result<ChallengeDetail, CtfdError> {
+        if self.is_rctf() {
+            return rctf::challenge_detail(self, challenge_id).await;
+        }
         self.get::<ChallengeDetail>(&format!("/api/v1/challenges/{challenge_id}"))
             .await
     }
@@ -164,17 +194,28 @@ impl CtfdClient {
     /// keeps bulk downloads from failing on a single hiccup.  Only GETs are
     /// retried; flag submissions are never resent automatically.
     async fn send_get(&self, url: &str) -> Result<reqwest::Response, CtfdError> {
+        self.send_get_with(url, Some(&format!("Token {}", self.api_token)))
+            .await
+    }
+
+    /// [`Self::send_get`] with an explicit `Authorization` value (or none).
+    async fn send_get_with(
+        &self,
+        url: &str,
+        authorization: Option<&str>,
+    ) -> Result<reqwest::Response, CtfdError> {
         let mut attempt = 1;
         loop {
-            let result = self
+            let mut request = self
                 .http
                 .get(url)
-                .header("Authorization", format!("Token {}", self.api_token))
                 // CTFd only honours `Authorization: Token` on requests with
                 // a JSON content type; without it, it redirects to /login.
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .send()
-                .await;
+                .header(reqwest::header::CONTENT_TYPE, "application/json");
+            if let Some(value) = authorization {
+                request = request.header("Authorization", value);
+            }
+            let result = request.send().await;
 
             let retry_delay = match &result {
                 Ok(resp) if is_retryable_status(resp.status()) => {
@@ -213,7 +254,13 @@ impl CtfdClient {
     /// an interrupted download never leaves a truncated file behind.
     pub async fn download_attachment_to(&self, url: &str, dest: &Path) -> anyhow::Result<u64> {
         let resolved_url = self.resolve_attachment_url(url);
-        let mut response = self.send_get(&resolved_url).await?;
+        // rCTF serves files from public (often third-party) storage: never
+        // send credentials there.
+        let mut response = if self.is_rctf() {
+            self.send_get_with(&resolved_url, None).await?
+        } else {
+            self.send_get(&resolved_url).await?
+        };
 
         let status = response.status();
         if status.is_client_error() || status.is_server_error() {
@@ -277,6 +324,9 @@ impl CtfdClient {
         challenge_id: u64,
         flag: &str,
     ) -> Result<SubmitResponse, CtfdError> {
+        if self.is_rctf() {
+            return rctf::submit(self, challenge_id, flag).await;
+        }
         let body = serde_json::json!({
             "challenge_id": challenge_id,
             "submission": flag,
@@ -284,6 +334,12 @@ impl CtfdClient {
 
         self.post_json("/api/v1/challenges/attempt", &body).await
     }
+}
+
+/// Whether `base_url` serves rCTF: its public client config answers with
+/// an rCTF `goodClientConfig` envelope.  Any failure means "not rCTF".
+pub async fn detect_rctf(base_url: &str) -> bool {
+    rctf::detect(base_url).await
 }
 
 /// Classify a CTFd API response and parse its envelope.

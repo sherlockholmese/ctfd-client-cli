@@ -1,5 +1,6 @@
 //! Head-to-head analytics: where a rival out-scores you, and which of
-//! their solves you could realistically catch up on.
+//! their solves you could realistically catch up on.  [`targets`] ranks
+//! everything you haven't solved against the whole board.
 
 use crate::models::Challenge;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -159,6 +160,132 @@ pub fn compare(
     }
 }
 
+/// An unsolved challenge, ranked for the climb to the top.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    pub stat: ChallengeStat,
+    /// Share of accounts that solved it (0..=1): a stand-in for difficulty.
+    pub share: f64,
+    /// Points weighted by `share`: what an attempt is likely worth.
+    pub expected: f64,
+    /// Your points gain after solving the list down to here.
+    pub running: i64,
+    /// The rank you would hold then, if nobody else scores.
+    pub reach: i64,
+    /// The best-ranked account this solve takes you past, when the rank
+    /// improves here: (its rank, its name).
+    pub passes: Option<(i64, String)>,
+}
+
+/// Open points in one category, for deciding where to spend time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Focus {
+    pub category: String,
+    pub open: usize,
+    pub points: i64,
+    pub expected: f64,
+}
+
+/// What the board knows about solve rates.
+#[derive(Debug, Clone, Copy)]
+pub struct Field {
+    /// Accounts on the scoreboard (for overall solve counts).
+    pub ranked: usize,
+    /// Accounts in `top_counts`.
+    pub top_n: usize,
+}
+
+/// Rank every challenge you haven't solved by likely points.
+///
+/// `others` are the other accounts' scores; reaching a rank means
+/// overtaking everyone with a higher or equal score (on a tie, whoever got
+/// there first stays ahead, and that is not you).
+pub fn targets(
+    challenges: &[Challenge],
+    mine: &HashSet<u64>,
+    top_counts: &HashMap<u64, usize>,
+    field: Field,
+    my_score: i64,
+    others: &[i64],
+) -> (Vec<Target>, Vec<Focus>) {
+    let share = |c: &Challenge, top: usize| match c.solves {
+        Some(n) if field.ranked > 0 => (n as f64 / field.ranked as f64).min(1.0),
+        _ if field.top_n > 0 => top as f64 / field.top_n as f64,
+        _ => 0.0,
+    };
+    let mut list: Vec<Target> = challenges
+        .iter()
+        .filter(|c| !mine.contains(&c.id))
+        .map(|c| {
+            let top_solves = top_counts.get(&c.id).copied().unwrap_or(0);
+            let share = share(c, top_solves);
+            Target {
+                stat: ChallengeStat {
+                    id: c.id,
+                    name: c.name.clone(),
+                    category: c.category.clone(),
+                    value: c.value,
+                    solves: c.solves,
+                    top_solves,
+                },
+                share,
+                expected: c.value as f64 * share,
+                running: 0,
+                reach: 0,
+                passes: None,
+            }
+        })
+        .collect();
+    list.sort_by(|a, b| {
+        b.expected
+            .total_cmp(&a.expected)
+            .then(b.stat.value.cmp(&a.stat.value))
+            .then(a.stat.name.cmp(&b.stat.name))
+    });
+
+    let mut running = 0;
+    for t in &mut list {
+        running += t.stat.value;
+        t.running = running;
+        let score = my_score + running;
+        t.reach = 1 + others.iter().filter(|&&o| o >= score).count() as i64;
+    }
+
+    let mut focus: BTreeMap<&str, Focus> = BTreeMap::new();
+    for t in &list {
+        let f = focus
+            .entry(t.stat.category.as_str())
+            .or_insert_with(|| Focus {
+                category: t.stat.category.clone(),
+                open: 0,
+                points: 0,
+                expected: 0.0,
+            });
+        f.open += 1;
+        f.points += t.stat.value;
+        f.expected += t.expected;
+    }
+    let mut focus: Vec<Focus> = focus.into_values().collect();
+    focus.sort_by(|a, b| {
+        b.expected
+            .total_cmp(&a.expected)
+            .then(a.category.cmp(&b.category))
+    });
+    (list, focus)
+}
+
+/// How many of `targets` it takes to gain more than `behind` points, and
+/// the points that brings.
+pub fn solves_to_pass(targets: &[Target], behind: i64) -> Option<(usize, i64)> {
+    if behind < 0 {
+        return None;
+    }
+    targets
+        .iter()
+        .position(|t| t.running > behind)
+        .map(|i| (i + 1, targets[i].running))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +353,52 @@ mod tests {
         assert_eq!(cmp.gap_closing_index(450), Some(1));
         assert_eq!(cmp.gap_closing_index(1001), None);
         assert_eq!(cmp.gap_closing_index(0), None);
+    }
+
+    #[test]
+    fn ranks_targets_by_likely_points() {
+        let top: HashMap<u64, usize> = HashMap::new();
+        let field = Field {
+            ranked: 100,
+            top_n: 10,
+        };
+        // Scores of the other accounts: 1000, 700, 400.
+        let (list, focus) = targets(&sample(), &set(&[1]), &top, field, 500, &[1000, 700, 400]);
+
+        let names: Vec<&str> = list.iter().map(|t| t.stat.name.as_str()).collect();
+        // xss 200*0.4=80, rop 300*0.2=60, rsa 250*0.15=37.5, heap 500*0.03=15
+        assert_eq!(names, ["xss", "rop", "rsa", "heap"]);
+        let running: Vec<i64> = list.iter().map(|t| t.running).collect();
+        assert_eq!(running, [200, 500, 750, 1250]);
+        // 700 ties #2 and 1000 ties #1, but they got there first.
+        let reach: Vec<i64> = list.iter().map(|t| t.reach).collect();
+        assert_eq!(reach, [3, 2, 1, 1]);
+
+        assert_eq!(focus[0].category, "Web");
+        assert_eq!(focus[1].category, "Pwn");
+        assert_eq!((focus[1].open, focus[1].points), (2, 800));
+
+        assert_eq!(solves_to_pass(&list, 200), Some((2, 500)));
+        assert_eq!(solves_to_pass(&list, 499), Some((2, 500)));
+        assert_eq!(solves_to_pass(&list, 500), Some((3, 750)));
+        assert_eq!(solves_to_pass(&list, 5000), None);
+        assert_eq!(solves_to_pass(&list, -1), None);
+    }
+
+    #[test]
+    fn falls_back_to_top_solves_without_counts() {
+        let mut challenges = sample();
+        for c in &mut challenges {
+            c.solves = None;
+        }
+        let top: HashMap<u64, usize> = [(2, 5), (3, 1)].into();
+        let field = Field {
+            ranked: 100,
+            top_n: 10,
+        };
+        let (list, _) = targets(&challenges, &set(&[]), &top, field, 0, &[]);
+        assert_eq!(list[0].stat.name, "heap");
+        assert!((list[0].share - 0.5).abs() < 1e-9);
+        assert_eq!(list[0].reach, 1);
     }
 }

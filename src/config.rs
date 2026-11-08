@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 const QUICK_START: &str = "\
 Quick start:
@@ -52,6 +52,44 @@ pub struct GlobalArgs {
         help_heading = "Connection (normally read from ctfd.toml)"
     )]
     pub token: Option<String>,
+
+    /// CTF platform (detected by `init` and saved in ctfd.toml)
+    #[arg(
+        long = "platform",
+        env = "CTFD_PLATFORM",
+        value_enum,
+        global = true,
+        help_heading = "Connection (normally read from ctfd.toml)"
+    )]
+    pub platform: Option<Platform>,
+}
+
+/// The CTF platform behind the URL.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Platform {
+    /// CTFd (API token from Settings -> Access Tokens)
+    #[default]
+    Ctfd,
+    /// rCTF (team token or login link from the profile page)
+    Rctf,
+}
+
+impl Platform {
+    /// The value written to ctfd.toml.
+    pub fn key(self) -> &'static str {
+        match self {
+            Platform::Ctfd => "ctfd",
+            Platform::Rctf => "rctf",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "ctfd" => Some(Platform::Ctfd),
+            "rctf" => Some(Platform::Rctf),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -129,6 +167,9 @@ Examples:
                            Only count points scored from then on (or set since in ctfd.toml)
   ctfdc lb --plain         Print once as text (also used when piped)
   ctfdc lb --demo          Try the live view on fictional data
+  ctfdc lb --web           Open the live scoreboard in your browser
+  ctfdc lb --web --port 8080 --no-open
+                           Serve on a fixed port without opening a browser
 
 Tab switches between Board (standings, graph, latest solves) and Analysis
 (you vs a rival: gaps, momentum, catch-up targets, categories, your edge).
@@ -203,6 +244,28 @@ pub struct LeaderboardArgs {
     /// Open the live view on fictional, simulated data (no server needed)
     #[arg(long, conflicts_with = "plain")]
     pub demo: bool,
+
+    /// Serve the live scoreboard as a web page and open it in your browser
+    #[arg(short = 'w', long, conflicts_with = "plain")]
+    pub web: bool,
+
+    /// Port for `--web` [default: any free port]
+    #[arg(long, value_name = "PORT", default_value_t = 0, requires = "web")]
+    pub port: u16,
+
+    /// Address for `--web` to listen on (other machines can reach the
+    /// scoreboard unless this is a loopback address)
+    #[arg(
+        long,
+        value_name = "ADDR",
+        default_value = "127.0.0.1",
+        requires = "web"
+    )]
+    pub bind: std::net::IpAddr,
+
+    /// With `--web`, print the address instead of opening a browser
+    #[arg(long, requires = "web")]
+    pub no_open: bool,
 
     /// Number of top teams drawn in the graph
     #[arg(
@@ -304,6 +367,7 @@ pub struct SubmitArgs {
 pub struct ResolvedConfig {
     pub base_url: String,
     pub api_token: String,
+    pub platform: Platform,
 }
 
 /// Errors that can occur during config resolution.
@@ -348,6 +412,11 @@ pub enum ConfigError {
         "Configuration file ctfd.toml has an invalid since value (expected a time such as `since = 2026-11-07T09:00:00+08:00` or `since = \"2026-11-07 09:00\"`)."
     )]
     TomlInvalidSince,
+    /// `ctfd.toml` has a `platform` value other than `ctfd` or `rctf`.
+    #[error(
+        "Configuration file ctfd.toml has an invalid platform value (expected \"ctfd\" or \"rctf\")."
+    )]
+    TomlInvalidPlatform,
     /// `ctfd.toml` exists but could not be read (permissions, etc.).
     #[error("Configuration file ctfd.toml could not be read: {0}")]
     TomlReadError(String),
@@ -445,6 +514,20 @@ fn workspace_table() -> Result<Option<toml::Table>, ConfigError> {
     toml::from_str(&content)
         .map(Some)
         .map_err(|_| ConfigError::TomlMalformed)
+}
+
+/// Read the platform from the nearest `ctfd.toml` (`platform = "rctf"`).
+pub fn workspace_platform() -> Result<Option<Platform>, ConfigError> {
+    let Some(table) = workspace_table()? else {
+        return Ok(None);
+    };
+    match table.get("platform") {
+        None => Ok(None),
+        Some(toml::Value::String(s)) => Platform::from_key(s)
+            .map(Some)
+            .ok_or(ConfigError::TomlInvalidPlatform),
+        Some(_) => Err(ConfigError::TomlInvalidPlatform),
+    }
 }
 
 /// Read the optional qualifying line (the top N places qualify) from the
@@ -573,9 +656,20 @@ impl GlobalArgs {
         let base_url = url.ok_or(ConfigError::MissingUrl)?;
         let api_token = token.ok_or(ConfigError::MissingToken)?;
 
+        // A file that can't be read at all only matters if it was needed
+        // for the URL or token (already handled above).
+        let platform = match self.platform {
+            Some(p) => p,
+            None => match workspace_platform() {
+                Err(ConfigError::TomlMalformed | ConfigError::TomlReadError(_)) => None,
+                other => other?,
+            }
+            .unwrap_or_default(),
+        };
         Ok(ResolvedConfig {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_token,
+            platform,
         })
     }
 }
@@ -640,7 +734,11 @@ mod tests {
             .map(String::from)
             .or_else(|| env_token.map(String::from));
 
-        let args = GlobalArgs { url, token };
+        let args = GlobalArgs {
+            url,
+            token,
+            platform: None,
+        };
 
         let result = args.resolve();
 
@@ -1085,7 +1183,11 @@ key = "value"
             .map(String::from)
             .or_else(|| env_token.map(String::from));
 
-        let args = GlobalArgs { url, token };
+        let args = GlobalArgs {
+            url,
+            token,
+            platform: None,
+        };
 
         // Save and restore CWD
         let prev_cwd = std::env::current_dir().ok();

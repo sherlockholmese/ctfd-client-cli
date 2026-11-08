@@ -1,13 +1,14 @@
+use crate::board::series::parse_time;
 use crate::client::{CtfdClient, CtfdError};
 use crate::config::{LeaderboardArgs, ResolvedConfig};
 use crate::models::{ScoreboardEntry, TopEntry};
-use crate::tui::series::parse_time;
 use std::collections::HashMap;
 use std::io::IsTerminal;
 
 /// Show the CTFd scoreboard.
 ///
-/// On a terminal this opens the live full-screen view (see
+/// With `--web` the live scoreboard is served to the browser (see
+/// [`crate::web`]).  On a terminal this opens the live full-screen view (see
 /// [`crate::tui`]); with `--plain`, or when stdout is not a terminal, the
 /// scoreboard is printed once as text.  The qualifying line comes from
 /// `--cutoff`, else `cutoff` in the nearest `ctfd.toml`; the scoring start
@@ -18,6 +19,9 @@ pub async fn run(config: ResolvedConfig, mut args: LeaderboardArgs) -> anyhow::R
     }
     if args.since.is_none() {
         args.since = crate::config::workspace_since()?;
+    }
+    if args.web {
+        return crate::web::run(config, args).await;
     }
     if !args.plain && std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
         return crate::tui::run(config, args).await;

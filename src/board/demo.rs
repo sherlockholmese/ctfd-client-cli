@@ -5,7 +5,7 @@
 //! dynamic scoring, and new solves keep arriving on every update so the
 //! live behaviour can be seen.  Nothing here touches the network.
 
-use super::app::Data;
+use super::model::Data;
 use crate::models::{
     AccountSolve, Challenge, ScoreEvent, ScoreboardEntry, SolvedChallenge, TopEntry,
 };
@@ -274,6 +274,7 @@ impl DemoWorld {
             top,
             challenges,
             accounts,
+            names: Default::default(),
         }
     }
 
@@ -287,6 +288,8 @@ impl DemoWorld {
                 challenge: Some(SolvedChallenge {
                     id: Some(c as u64 + 1),
                     value: self.value(c),
+                    name: None,
+                    category: None,
                 }),
             })
             .collect()

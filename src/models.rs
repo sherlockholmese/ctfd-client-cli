@@ -89,6 +89,12 @@ pub struct SolvedChallenge {
     /// Point value.
     #[serde(default)]
     pub value: i64,
+    /// Challenge name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Challenge category.
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 /// A visible challenge from the CTFd challenge list.
@@ -107,7 +113,7 @@ pub struct Challenge {
     /// Point value.
     pub value: i64,
     /// Whether the authenticated user has solved this challenge.
-    #[serde(rename = "solved_by_me")]
+    #[serde(rename = "solved_by_me", default)]
     pub solved_by_me: bool,
     /// Number of accounts that solved it (CTFd 3.x reports this).
     #[serde(default)]

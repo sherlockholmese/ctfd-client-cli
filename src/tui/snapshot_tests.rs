@@ -3,8 +3,10 @@
 //! Set `CTFDC_SNAPSHOT_DIR=<dir>` to also export each frame as colored HTML
 //! (dark and light terminal backgrounds) for visual review.
 
-use super::app::{App, BoardLayout, Data, Update, View};
-use super::{demo, series, view};
+use super::app::{App, BoardLayout, View};
+use super::view;
+use crate::board::model::{BoardModel, Data, Update};
+use crate::board::{demo, series};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -14,7 +16,7 @@ use std::time::Duration;
 
 fn demo_app(cutoff: Option<u32>) -> App {
     let world = demo::DemoWorld::new(series::now());
-    let mut app = App::new(
+    let mut app = App::new(BoardModel::new(
         "demo.ctfd.invalid".into(),
         true,
         Duration::from_secs(15),
@@ -23,10 +25,10 @@ fn demo_app(cutoff: Option<u32>) -> App {
         Some(demo::ME_ID),
         Some(demo::ME_NAME.into()),
         world.snapshot(10, &[]),
-    );
+    ));
     let wanted = app.wanted_accounts();
     for id in wanted {
-        app.data.accounts.insert(id, world.account(id));
+        app.board.data.accounts.insert(id, world.account(id));
     }
     app.rebuild(false);
     app
@@ -203,15 +205,15 @@ fn analysis_narrow_keeps_primary_sections() {
 fn rival_cycles_and_skips_you() {
     let mut app = demo_app(None);
     app.on_key(key(KeyCode::Tab));
-    let me = app.me_index().unwrap();
-    let first = app.rival_index().unwrap();
+    let me = app.board.me_index().unwrap();
+    let first = app.board.rival_index().unwrap();
     assert_ne!(first, me);
     for _ in 0..3 {
         app.on_key(key(KeyCode::Right));
-        assert_ne!(app.rival_index(), Some(me));
+        assert_ne!(app.board.rival_index(), Some(me));
     }
     app.on_key(key(KeyCode::Char('m')));
-    assert_eq!(app.rival_index(), Some(me - 1), "m = team above you");
+    assert_eq!(app.board.rival_index(), Some(me - 1), "m = team above you");
 }
 
 #[test]
@@ -238,20 +240,20 @@ fn help_overlay_and_search() {
     let buf = draw(&mut app, 120, 36);
     export("search-120x36", &buf);
     assert!(text(&buf).contains("Find team: rust"));
-    assert_eq!(app.data.standings[app.selected].name, "🦀 Rustaceans");
+    assert_eq!(app.board.data.standings[app.selected].name, "🦀 Rustaceans");
 }
 
 #[test]
 fn live_update_marks_changes_and_keeps_selection() {
     let mut world = demo::DemoWorld::new(series::now());
     let mut app = demo_app(None);
-    let selected_name = app.data.standings[app.selected].name.clone();
+    let selected_name = app.board.data.standings[app.selected].name.clone();
     for i in 0..40 {
         world.tick(series::now() + i);
     }
     app.apply(Update::Data(Box::new(world.snapshot(10, &[]))));
-    assert_eq!(app.data.standings[app.selected].name, selected_name);
-    assert!(!app.changes.is_empty(), "score changes are tracked");
+    assert_eq!(app.board.data.standings[app.selected].name, selected_name);
+    assert!(!app.board.changes.is_empty(), "score changes are tracked");
     let buf = draw(&mut app, 160, 44);
     export("board-live-160x44", &buf);
 }
@@ -268,7 +270,7 @@ fn failed_update_keeps_data_and_says_so() {
 
 #[test]
 fn empty_and_tiny_states() {
-    let mut app = App::new(
+    let mut app = App::new(BoardModel::new(
         "ctf.example.com".into(),
         false,
         Duration::from_secs(15),
@@ -277,7 +279,7 @@ fn empty_and_tiny_states() {
         None,
         None,
         Data::default(),
-    );
+    ));
     let buf = draw(&mut app, 120, 30);
     export("empty-120x30", &buf);
     let t = text(&buf);
@@ -301,4 +303,43 @@ fn layouts_cycle() {
     assert!(!text(&buf).contains("Standings"));
     app.on_key(key(KeyCode::Char('l')));
     assert_eq!(app.layout, BoardLayout::Table);
+}
+
+#[test]
+fn plan_ranks_targets_and_the_climb() {
+    let mut app = demo_app(None);
+    app.on_key(key(KeyCode::Char('3')));
+    assert_eq!(app.view, View::Plan);
+    let buf = draw(&mut app, 160, 44);
+    export("plan-160x44", &buf);
+    export("plan-100x30", &draw(&mut app, 100, 30));
+    let t = text(&buf);
+    for needle in [
+        "#6 Null Pointers",
+        "behind #1 Heap Hoppers",
+        "Best targets",
+        "↑ passes",
+        "Path to the top",
+        "Where to focus",
+    ] {
+        assert!(t.contains(needle), "missing {needle:?}\n{t}");
+    }
+
+    let plan = &app.board.plan;
+    assert!(!plan.targets.is_empty());
+    assert!(
+        plan.targets
+            .windows(2)
+            .all(|w| w[0].expected >= w[1].expected),
+        "most likely points first"
+    );
+    // The ladder holds the leaders and the teams around you, in rank order.
+    let ranks: Vec<i64> = plan.ladder.iter().map(|r| r.pos).collect();
+    assert_eq!(ranks, [1, 2, 3, 4, 5, 7, 8]);
+
+    // Tab cycles Board -> Analysis -> Plan -> Board.
+    app.on_key(key(KeyCode::Tab));
+    assert_eq!(app.view, View::Board);
+    app.on_key(key(KeyCode::BackTab));
+    assert_eq!(app.view, View::Plan);
 }

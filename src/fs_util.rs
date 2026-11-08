@@ -61,8 +61,16 @@ pub fn sanitize_name(raw: &str) -> String {
 /// Extract a safe filename from an attachment URL.
 ///
 /// Takes the last path segment of the URL, decodes URL-encoded characters,
-/// and sanitizes the result.
+/// and sanitizes the result.  A `#name` fragment (added for rCTF, whose
+/// file URLs don't end in the file name) names the file instead.
 pub fn attachment_filename(url: &str) -> String {
+    if let Some((_, name)) = url.split_once('#')
+        && !name.is_empty()
+        && !name.contains('/')
+    {
+        let decoded = urlencoding::decode(name).unwrap_or_else(|_| name.into());
+        return sanitize_name(&decoded);
+    }
     // Strip query string and fragment.
     let path_part = url.split('?').next().unwrap_or(url);
     let path_part = path_part.split('#').next().unwrap_or(path_part);

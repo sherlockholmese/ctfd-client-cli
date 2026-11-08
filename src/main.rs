@@ -1,9 +1,11 @@
+mod board;
 mod client;
 mod commands;
 mod config;
 mod fs_util;
 mod models;
 mod tui;
+mod web;
 
 use clap::{CommandFactory, Parser};
 use config::{Cli, Commands};
@@ -19,6 +21,9 @@ async fn main() -> anyhow::Result<()> {
             let mut args = args.clone();
             if args.cutoff.is_none() {
                 args.cutoff = config::workspace_qualify()?;
+            }
+            if args.web {
+                return web::run_demo(args).await;
             }
             return tui::run_demo(args).await;
         }

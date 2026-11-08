@@ -1,5 +1,5 @@
-use crate::client::{CtfdClient, CtfdError, DenyKind};
-use crate::config::{GlobalArgs, InitArgs, ResolvedConfig};
+use crate::client::{CtfdClient, CtfdError, DenyKind, detect_rctf};
+use crate::config::{GlobalArgs, InitArgs, Platform, ResolvedConfig};
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
@@ -10,27 +10,41 @@ const CONFIG_FILE: &str = "ctfd.toml";
 /// Collects the URL (argument, `--url`/`CTFD_URL`, existing `ctfd.toml`, or
 /// a prompt) and token (`--token`/`CTFD_TOKEN` or a hidden prompt),
 /// verifies the token with `GET /api/v1/users/me`, and writes `ctfd.toml`
+/// (with `platform = "rctf"` when the server is rCTF; an rCTF login link
+/// `https://ctf/login?token=...` supplies both URL and team token)
 /// readable only by the current user.  When the folder is a git checkout,
 /// `ctfd.toml` is added to `.gitignore` so the token is not committed.
 pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
     let path = Path::new(CONFIG_FILE);
-    let (existing_url, existing_token, existing_cutoff) = read_existing(path);
-    let cutoff = args.cutoff.or(existing_cutoff);
+    let existing = read_existing(path);
+    let cutoff = args.cutoff.or(existing.cutoff);
 
-    let url = match first_non_empty([args.url.clone(), global.url.clone(), existing_url]) {
+    let raw_url = match first_non_empty([args.url.clone(), global.url.clone(), existing.url]) {
         Some(url) => url,
-        None => prompt_line("CTFd URL (e.g. https://ctf.example.com): ")?,
+        None => prompt_line("CTF URL or rCTF login link (e.g. https://ctf.example.com): ")?,
     };
-    let url = normalize_url(&url)?;
+    let link_token = login_link_token(&raw_url);
+    let url = normalize_url(&raw_url)?;
 
-    let token = match first_non_empty([global.token.clone()]) {
+    let platform = match (global.platform, link_token.is_some()) {
+        (Some(p), _) => p,
+        (None, true) => Platform::Rctf,
+        (None, false) if detect_rctf(&url).await => Platform::Rctf,
+        (None, false) => existing.platform.unwrap_or_default(),
+    };
+    if platform == Platform::Rctf {
+        println!("{url} runs rCTF.");
+    }
+
+    let token = match first_non_empty([global.token.clone(), link_token]) {
         Some(token) => token,
-        None => prompt_token(&url, existing_token)?,
+        None => prompt_token(&url, platform, existing.token)?,
     };
 
     let config = ResolvedConfig {
         base_url: url.clone(),
         api_token: token.clone(),
+        platform,
     };
 
     if args.no_verify {
@@ -45,10 +59,16 @@ pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
             Err(CtfdError::Denied {
                 kind: DenyKind::BadToken,
                 ..
-            }) => anyhow::bail!(
-                "The server rejected this token. Create a new one in CTFd under \
-                 Settings -> Access Tokens ({url}/settings) and run init again."
-            ),
+            }) => match platform {
+                Platform::Ctfd => anyhow::bail!(
+                    "The server rejected this token. Create a new one in CTFd under \
+                     Settings -> Access Tokens ({url}/settings) and run init again."
+                ),
+                Platform::Rctf => anyhow::bail!(
+                    "rCTF rejected this team token. Copy the login link from your profile \
+                     ({url}/profile) and run `ctfdc init '<link>'` again."
+                ),
+            },
             Err(e) => anyhow::bail!(
                 "Could not verify the token with {url}: {e}\n\
                  Check the URL, or re-run with --no-verify to save it anyway."
@@ -56,7 +76,7 @@ pub async fn run(global: &GlobalArgs, args: InitArgs) -> anyhow::Result<()> {
         }
     }
 
-    write_config(path, &url, &token, cutoff)?;
+    write_config(path, &url, &token, platform, cutoff)?;
     println!("Saved {CONFIG_FILE} (readable only by you).");
     if let Some(n) = cutoff {
         println!("Qualifying line: top {n}.");
@@ -83,14 +103,22 @@ fn first_non_empty<const N: usize>(values: [Option<String>; N]) -> Option<String
         .find(|v| !v.is_empty())
 }
 
-/// Read url/token/cutoff from an existing config file, ignoring any
-/// problems.
-fn read_existing(path: &Path) -> (Option<String>, Option<String>, Option<u32>) {
+/// Settings from an existing `ctfd.toml`.
+#[derive(Default)]
+struct Existing {
+    url: Option<String>,
+    token: Option<String>,
+    cutoff: Option<u32>,
+    platform: Option<Platform>,
+}
+
+/// Read an existing config file, ignoring any problems.
+fn read_existing(path: &Path) -> Existing {
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (None, None, None);
+        return Existing::default();
     };
     let Ok(table) = toml::from_str::<toml::Table>(&content) else {
-        return (None, None, None);
+        return Existing::default();
     };
     let cutoff = table
         .get("cutoff")
@@ -105,7 +133,28 @@ fn read_existing(path: &Path) -> (Option<String>, Option<String>, Option<u32>) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    (get("url"), get("token"), cutoff)
+    let platform = match get("platform").as_deref() {
+        Some("rctf") => Some(Platform::Rctf),
+        Some("ctfd") => Some(Platform::Ctfd),
+        _ => None,
+    };
+    Existing {
+        url: get("url"),
+        token: get("token"),
+        cutoff,
+        platform,
+    }
+}
+
+/// The team token in an rCTF login link (`.../login?token=...`).
+fn login_link_token(raw: &str) -> Option<String> {
+    let query = raw.split_once('?')?.1;
+    let query = query.split('#').next().unwrap_or(query);
+    query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("token="))
+        .map(|t| urlencoding::decode(t).map_or_else(|_| t.to_string(), |d| d.into_owned()))
+        .filter(|t| !t.trim().is_empty())
 }
 
 /// Normalize what people paste: add `https://`, drop trailing slashes and
@@ -131,6 +180,10 @@ pub fn normalize_url(raw: &str) -> anyhow::Result<String> {
         "/users",
         "/teams",
         "/notifications",
+        // rCTF pages.
+        "/profile",
+        "/scores",
+        "/challs",
     ] {
         if let Some(stripped) = url.strip_suffix(page) {
             url = stripped.trim_end_matches('/').to_string();
@@ -154,27 +207,46 @@ fn prompt_line(prompt: &str) -> anyhow::Result<String> {
     Ok(line.trim().to_string())
 }
 
-fn prompt_token(url: &str, existing: Option<String>) -> anyhow::Result<String> {
+fn prompt_token(url: &str, platform: Platform, existing: Option<String>) -> anyhow::Result<String> {
+    let noun = match platform {
+        Platform::Ctfd => "API token",
+        Platform::Rctf => "Team token or login link",
+    };
     if !std::io::stdin().is_terminal() {
         return existing.ok_or_else(|| {
-            anyhow::anyhow!("Missing API token. Pass --token <token> or set CTFD_TOKEN.")
+            anyhow::anyhow!("Missing {noun}. Pass --token <token> or set CTFD_TOKEN.")
         });
     }
-    println!("Create an API token in CTFd under Settings -> Access Tokens ({url}/settings).");
+    match platform {
+        Platform::Ctfd => println!(
+            "Create an API token in CTFd under Settings -> Access Tokens ({url}/settings)."
+        ),
+        Platform::Rctf => {
+            println!("Copy your login link (or team token) from your rCTF profile ({url}/profile).")
+        }
+    }
     let prompt = if existing.is_some() {
-        "API token (input hidden, Enter keeps the current one): "
+        format!("{noun} (input hidden, Enter keeps the current one): ")
     } else {
-        "API token (input hidden): "
+        format!("{noun} (input hidden): ")
     };
     let entered = rpassword::prompt_password(prompt)?;
-    match (entered.trim(), existing) {
+    let entered = entered.trim();
+    let entered = login_link_token(entered).unwrap_or_else(|| entered.to_string());
+    match (entered.as_str(), existing) {
         ("", Some(existing)) => Ok(existing),
-        ("", None) => anyhow::bail!("An API token is required."),
+        ("", None) => anyhow::bail!("A {noun} is required."),
         (token, _) => Ok(token.to_string()),
     }
 }
 
-fn write_config(path: &Path, url: &str, token: &str, cutoff: Option<u32>) -> anyhow::Result<()> {
+fn write_config(
+    path: &Path,
+    url: &str,
+    token: &str,
+    platform: Platform,
+    cutoff: Option<u32>,
+) -> anyhow::Result<()> {
     // Keep other settings (e.g. `since`) from an existing, valid file.
     let mut table = std::fs::read_to_string(path)
         .ok()
@@ -183,6 +255,13 @@ fn write_config(path: &Path, url: &str, token: &str, cutoff: Option<u32>) -> any
     table.remove("qualify");
     table.insert("url".into(), toml::Value::String(url.into()));
     table.insert("token".into(), toml::Value::String(token.into()));
+    match platform {
+        Platform::Ctfd => table.remove("platform"),
+        Platform::Rctf => table.insert(
+            "platform".into(),
+            toml::Value::String(platform.key().into()),
+        ),
+    };
     if let Some(n) = cutoff {
         table.insert("cutoff".into(), toml::Value::Integer(i64::from(n)));
     }
@@ -237,7 +316,20 @@ fn ensure_gitignored() -> anyhow::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_url;
+    use super::{login_link_token, normalize_url};
+
+    #[test]
+    fn reads_rctf_login_links() {
+        assert_eq!(
+            login_link_token("https://ctf.example.com/login?token=abc%2Bdef%3D").as_deref(),
+            Some("abc+def=")
+        );
+        assert_eq!(login_link_token("https://ctf.example.com/login"), None);
+        assert_eq!(
+            normalize_url("https://ctf.example.com/login?token=abc").unwrap(),
+            "https://ctf.example.com"
+        );
+    }
 
     #[test]
     fn normalizes_pasted_urls() {
