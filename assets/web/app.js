@@ -29,6 +29,7 @@
     refreshing: false,
     layout: "split", // board layout: split, graph, table
     seenNotice: 0, // highest notice id already shown
+    target: null, // id of the Plan target whose details are shown
   };
 
   // ------------------------------------------------------------ theme
@@ -1066,6 +1067,28 @@
     return plan.ladder.find((r) => r.pos === plan.goal) ?? null;
   }
 
+  function pickTarget(id) {
+    state.target = id;
+    renderPlan();
+  }
+  // Up and down the list as it is shown: the route, then the rest.
+  function stepTarget(delta) {
+    const rows = [...document.querySelectorAll("#targets-body tr[data-id]")];
+    const i = rows.findIndex((r) => r.classList.contains("is-picked"));
+    const next = rows[Math.min(rows.length - 1, Math.max(0, i + delta))];
+    if (!next) return;
+    pickTarget(Number(next.dataset.id));
+    document.querySelector("#targets-body tr.is-picked")?.scrollIntoView({ block: "nearest" });
+  }
+  function setSort(by) {
+    api("sort", { by }).catch(() => {});
+  }
+  function cycleSort() {
+    const keys = state.snap.plan.sorts.map(([key]) => key);
+    setSort(keys[(keys.indexOf(state.snap.plan.sort) + 1) % keys.length]);
+  }
+  for (const btn of document.querySelectorAll("#view-plan .sort")) btn.addEventListener("click", () => setSort(btn.dataset.sort));
+
   function setGoal(key) {
     api("goal", { key }).catch(() => {});
   }
@@ -1094,14 +1117,14 @@
       const m = r.momentum;
       return [
         el("span", { class: `num ${gap > 0 ? "delta-up" : gap < 0 ? "delta-down" : "muted"}`, text: signed(gap) || "0" }),
-        el("span", { class: "num muted", text: m ? signed(m.last_hour) || "0" : "" }),
-        el("span", { class: "num", title: r.points ? `+${num(r.points)}` : null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
+        el("span", { class: "num muted", text: r.pace === null ? "" : num(Math.round(r.pace)), title: m ? `${signed(m.last_hour) || "0"} in the last hour, ${signed(m.last_3h) || "0"} in the last 3` : null }),
+        el("span", { class: "num", title: [r.points ? `+${num(r.points)}` : "", r.time ? `about ${r.time} of work` : ""].filter(Boolean).join(", ") || null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
         el("span", { class: "num muted", text: r.ahead < 0 || r.odds === null ? "" : pct(r.odds) }),
       ];
     };
     const name = (text, badge) => el("span", { class: "rung-name" }, el("span", { text, title: text }), badge ? el("span", { class: "badge badge-solid badge-sm", text: badge }) : null);
     const youRow = () =>
-      el("div", { class: "rung is-me", role: "presentation" }, el("span"), el("span", { class: "num rung-pos", text: me.pos }), name(me.name, "You"), el("span"), el("span"), el("span"), el("span"));
+      el("div", { class: "rung is-me", role: "presentation" }, el("span"), el("span", { class: "num rung-pos", text: me.pos }), name(me.name, "You"), el("span"), el("span", { class: "num", text: plan.my_pace === null ? "" : num(Math.round(plan.my_pace)) }), el("span"), el("span"));
     const rows = [];
     let placed = false;
     for (const r of plan.ladder) {
@@ -1144,6 +1167,7 @@
 
     const goal = goalRung();
     renderLadder(goal);
+    $("pace-note").textContent = plan.pace_note;
 
     // The answer: who you aim for, what it takes, how likely it is.
     const byId = new Map(plan.targets.map((t) => [t.id, t]));
@@ -1167,15 +1191,26 @@
     // The route first, in the order to try it, closed by a line; then
     // everything else, most likely points first.
     const onRoute = new Set(route.map((t) => t.id));
+    // The picked target, kept while it is still open; else the first step.
+    const listed = [...route, ...plan.targets.filter((t) => !onRoute.has(t.id))];
+    const picked = listed.find((t) => t.id === state.target) ?? listed[0] ?? null;
+    const pickedId = picked ? picked.id : null;
+    state.target = pickedId;
     const targetRow = (t, step) => {
       const field = t.solves !== null ? `${num(t.solves)} of ${num(s.standings.length)} ${s.noun}s solved it` : `${t.top_solves} of the top ${s.top_n} solved it`;
+      const picked = t.id === pickedId;
       return el(
         "tr",
-        { class: step ? "on-route" : null },
+        { class: [step ? "on-route" : "", picked ? "is-picked" : ""].join(" ").trim() || null, "data-id": t.id, onclick: () => pickTarget(t.id) },
         el(
           "td",
           { class: "col-name" },
-          el("span", { class: "chal" }, step ? el("span", { class: "step", text: step, title: `Step ${step} of the route` }) : null, el("span", { class: "chal-name", text: t.name, title: t.name })),
+          el(
+            "span",
+            { class: "chal" },
+            step ? el("span", { class: "step", text: step, title: `Step ${step} of the route` }) : null,
+            el("button", { class: "pick chal-name", type: "button", "aria-pressed": picked ? "true" : "false", text: t.name, title: `${t.name}: show details` }),
+          ),
         ),
         el("td", { class: "hide-sm col-cat cat", text: t.category }),
         el("td", { class: "col-diff diff", "data-tagged": String(t.difficulty_tagged), text: t.difficulty_label, title: t.difficulty_tagged ? "Tagged by the organisers" : "Estimated from solves and points" }),
@@ -1185,16 +1220,32 @@
           { class: "num" },
           el("span", { class: "pop", title: field }, el("span", { text: pct(t.odds) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round(t.odds * 100)}%` }))),
         ),
+        el("td", { class: `num col-time${t.time_guessed ? " guess" : ""}`, text: t.time ? (t.time_guessed ? `~${t.time}` : t.time) : "—", title: t.time ? (t.time_guessed ? "Guessed from its difficulty: no tracked team has solved it" : "What it took the teams that solved it, at your pace") : null }),
+        el("td", { class: "num col-rate", text: t.per_hour === null ? "—" : num(Math.round(t.per_hour)) }),
         el("td", { class: "hide-sm col-why why", text: t.why ?? "", title: REASON_TITLES[t.reason] ?? null }),
       );
     };
     const targets = route.map((t, i) => targetRow(t, i + 1));
     if (route.length) {
       const label = qualifying ? `Reaches top ${s.cutoff}, past ${goal.name}` : `Passes ${goal.name} for #${goal.pos}`;
-      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 6 }, el("span", { text: label }))));
+      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 8 }, el("span", { text: label }))));
     }
     for (const t of plan.targets) if (!onRoute.has(t.id)) targets.push(targetRow(t, 0));
+    const refocus = $("targets-body").contains(document.activeElement);
     replace($("targets-body"), targets);
+    if (refocus) $("targets-body").querySelector('.pick[aria-pressed="true"]')?.focus();
+    for (const th of document.querySelectorAll("#view-plan th:has(.sort)")) {
+      const key = th.querySelector(".sort").dataset.sort;
+      if (key === plan.sort) th.setAttribute("aria-sort", key === "time" ? "ascending" : "descending");
+      else th.removeAttribute("aria-sort");
+    }
+
+    // Everything known about the picked target.
+    $("signals").hidden = !picked;
+    if (picked) {
+      $("signals-title").textContent = picked.name;
+      replace($("facts"), picked.facts.map((f) => el("div", { class: f.wide ? "wide" : null }, el("dt", { text: f.label }), el("dd", { text: f.value }))));
+    }
     $("targets-empty").hidden = targets.length > 0;
     $("targets-empty").textContent = s.h2h.categories.length ? "Nothing left" : "Challenges aren't visible yet";
 
@@ -1222,6 +1273,11 @@
       el("td", { class: "hide-sm col-cat cat", text: c.category }),
       el("td", { class: "num", text: num(c.value) }),
     ];
+  }
+
+  // How far into the CTF a challenge was solved.
+  function whenCell(c) {
+    return el("td", { class: "num hide-sm col-when muted", text: c.solved_in ?? "—" });
   }
 
   function popularity(c) {
@@ -1297,10 +1353,10 @@
       let running = 0;
       h.catch_up.forEach((c, i) => {
         running += c.value;
-        catchBody.push(el("tr", null, ...challengeCells(c), popularity(c), el("td", { class: "num hide-sm col-extra muted", text: num(running) })));
+        catchBody.push(el("tr", null, ...challengeCells(c), popularity(c), whenCell(c), el("td", { class: "num hide-sm col-extra muted", text: num(running) })));
         if (i === h.closes_gap_at && i < h.catch_up.length - 1) {
           const gapPts = h.rival.score - h.me.score;
-          catchBody.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 5 }, el("span", { text: `Passes ${h.rival.name}`, title: `Solving down to here closes the ${num(gapPts)} point gap` }))));
+          catchBody.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 6 }, el("span", { text: `Passes ${h.rival.name}`, title: `Solving down to here closes the ${num(gapPts)} point gap` }))));
         }
       });
     }
@@ -1308,7 +1364,7 @@
     catchEmpty.hidden = catchBody.length > 0;
 
     // Edge.
-    const edgeRows = h.rival && !h.rival_loading ? h.edge.map((c) => el("tr", null, ...challengeCells(c))) : [];
+    const edgeRows = h.rival && !h.rival_loading ? h.edge.map((c) => el("tr", null, ...challengeCells(c), whenCell(c))) : [];
     replace($("edge-body"), edgeRows);
     $("edge-empty").hidden = edgeRows.length > 0;
     $("edge-empty").textContent = !h.rival ? "No rival" : h.rival_loading ? "Loading…" : "Nothing yet";
@@ -1430,7 +1486,7 @@
     if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || keysDialog.open) return;
     const t = e.target;
     if (t.closest("input, textarea, select, [contenteditable]")) return;
-    const arrow = e.key === "ArrowLeft" || e.key === "ArrowRight";
+    const arrow = e.key.startsWith("Arrow");
     if (arrow && t.closest('[role="tablist"], [role="radiogroup"], [role="combobox"]')) return;
     const step = { ArrowLeft: -1, h: -1, ArrowRight: 1 }[e.key] ?? (e.key === "l" && state.view !== "board" ? 1 : 0);
     const ready = !!state.snap;
@@ -1451,6 +1507,9 @@
       else setGoal(null);
     } else if (step && state.view === "analysis") stepRival(step);
     else if (step && state.view === "plan") stepGoal(step);
+    else if (state.view === "plan" && (e.key === "ArrowDown" || e.key === "j")) stepTarget(1);
+    else if (state.view === "plan" && (e.key === "ArrowUp" || e.key === "k")) stepTarget(-1);
+    else if (state.view === "plan" && e.key === "s") cycleSort();
     else if (e.key === "t" && state.view === "board") cycleRange();
     else if (e.key === "l" && state.view === "board") cycleLayout();
     else handled = false;

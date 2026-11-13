@@ -1,7 +1,7 @@
 //! The JSON the web page renders: one self-contained snapshot of the
 //! [`BoardModel`], sent on load and after every change.
 
-use crate::board::analysis::{CategoryRow, ChallengeStat};
+use crate::board::analysis::{self, CategoryRow, ChallengeStat};
 use crate::board::model::{BoardModel, Momentum, Party, account_key};
 use serde::Serialize;
 
@@ -121,6 +121,9 @@ pub struct Challenge {
     pub value: i64,
     pub solves: Option<u64>,
     pub top_solves: usize,
+    /// How far into the CTF it was solved, in words, by whoever the list
+    /// is about (the rival for catch-up, you for your edge).
+    pub solved_in: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -159,6 +162,16 @@ pub struct Plan {
     pub focus: Vec<Focus>,
     /// Rank of the team to aim for first.
     pub goal: Option<i64>,
+    /// How targets off the route are ordered: `likely`, `per_hour`,
+    /// `odds`, `points` or `time`.
+    pub sort: &'static str,
+    /// Your points per hour over the last three hours.
+    pub my_pace: Option<f64>,
+    /// How often you solve against the field, and whether you are
+    /// closing on the goal, in words.
+    pub pace_note: String,
+    /// The orders the targets can be put in: key and name.
+    pub sorts: Vec<(&'static str, &'static str)>,
 }
 
 #[derive(Serialize)]
@@ -177,6 +190,12 @@ pub struct Rung {
     pub route: Vec<u64>,
     /// Chance of landing the whole route (0..=1).
     pub odds: Option<f64>,
+    /// Your time for the whole route, in words.
+    pub time: Option<String>,
+    /// Points per hour over the last three hours.
+    pub pace: Option<f64>,
+    /// Time until you draw level at both current paces, in words.
+    pub catch_in: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -199,10 +218,26 @@ pub struct Target {
     pub reason: Option<&'static str>,
     /// The same, as the words to show.
     pub why: Option<String>,
+    /// How long it should take you, in words, and whether that is a
+    /// guess from its difficulty.
+    pub time: Option<String>,
+    pub time_guessed: bool,
+    /// Likely points per hour of that time.
+    pub per_hour: Option<f64>,
+    /// Everything known about it, as labelled lines.
+    pub facts: Vec<Fact>,
     pub running: i64,
     pub reach: i64,
     /// Name of the best-ranked account this solve takes you past.
     pub passes: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Fact {
+    pub label: String,
+    pub value: String,
+    /// A long value that wants a line of its own.
+    pub wide: bool,
 }
 
 #[derive(Serialize)]
@@ -235,8 +270,9 @@ fn side(p: &Party, momentum: Option<Momentum>) -> Side {
     }
 }
 
-fn challenge(c: &ChallengeStat) -> Challenge {
+fn challenge(c: &ChallengeStat, start: i64) -> Challenge {
     Challenge {
+        solved_in: c.at.map(|t| analysis::span_text(t - start)),
         id: c.id,
         name: c.name.clone(),
         category: c.category.clone(),
@@ -323,6 +359,7 @@ impl Snapshot {
             })
             .collect();
 
+        let start = model.plan.start;
         let h = &model.h2h;
         let c = &h.comparison;
         let gap = match (&h.me, &h.rival) {
@@ -343,12 +380,12 @@ impl Snapshot {
                     .is_some_and(|(me, n)| me.pos <= i64::from(n)),
             }),
             categories: c.categories.iter().map(category).collect(),
-            catch_up: c.catch_up.iter().map(challenge).collect(),
+            catch_up: c.catch_up.iter().map(|c| challenge(c, start)).collect(),
             catch_up_points: c.catch_up_points(),
             closes_gap_at: c.gap_closing_index(gap),
-            edge: c.edge.iter().map(challenge).collect(),
+            edge: c.edge.iter().map(|c| challenge(c, start)).collect(),
             edge_points: c.edge_points(),
-            field: c.field.iter().map(challenge).collect(),
+            field: c.field.iter().map(|c| challenge(c, start)).collect(),
         };
 
         let p = &model.plan;
@@ -367,13 +404,28 @@ impl Snapshot {
                     points: r.to_pass.map(|(_, pts)| pts),
                     route: r.route.clone(),
                     odds: r.route_odds,
+                    time: r.route_time.map(analysis::span_text),
+                    pace: r.pace,
+                    catch_in: r.catch_in.map(analysis::span_text),
                 })
                 .collect(),
             targets: p
-                .targets
-                .iter()
+                .listed()
+                .into_iter()
                 .map(|t| Target {
-                    challenge: challenge(&t.stat),
+                    challenge: challenge(&t.stat, start),
+                    time: t.time.map(analysis::span_text),
+                    time_guessed: t.time_guessed,
+                    per_hour: t.per_hour,
+                    facts: p
+                        .facts(t, model.now)
+                        .into_iter()
+                        .map(|f| Fact {
+                            label: f.label,
+                            value: f.value,
+                            wide: f.wide,
+                        })
+                        .collect(),
                     share: t.share,
                     difficulty: t.difficulty.level.key(),
                     difficulty_label: t.difficulty.level.label(),
@@ -401,6 +453,13 @@ impl Snapshot {
                 })
                 .collect(),
             goal: p.goal,
+            sort: p.sort.key(),
+            my_pace: p.my_pace,
+            pace_note: p.pace_note(),
+            sorts: analysis::Sort::ALL
+                .iter()
+                .map(|s| (s.key(), s.label()))
+                .collect(),
         };
 
         Snapshot {

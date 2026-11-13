@@ -322,6 +322,16 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.board.step_goal(-1),
             KeyCode::Right | KeyCode::Char('l') => self.board.step_goal(1),
             KeyCode::Char('m') => self.board.reset_goal(),
+            KeyCode::Char('s') => {
+                use crate::board::analysis::Sort;
+                let i = Sort::ALL
+                    .iter()
+                    .position(|s| *s == self.board.plan.sort)
+                    .unwrap_or(0);
+                self.board.set_sort(Sort::ALL[(i + 1) % Sort::ALL.len()]);
+                self.plan_state.select(Some(0));
+                return;
+            }
             _ => {}
         }
         if self.board.plan.goal != goal {

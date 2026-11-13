@@ -170,6 +170,7 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/refresh", post(refresh))
         .route("/rival", post(set_rival))
         .route("/goal", post(set_goal))
+        .route("/sort", post(set_sort))
         .route("/pin", post(set_pin))
         .layer(middleware::from_fn_with_state(shared.clone(), require_key));
 
@@ -353,6 +354,21 @@ async fn set_goal(State(shared): State<Arc<Shared>>, Json(body): Json<GoalBody>)
             None => model.reset_goal(),
         }
     }
+    shared.publish();
+    StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct SortBody {
+    /// One of the sort keys in the snapshot's `plan.sort`.
+    by: String,
+}
+
+async fn set_sort(State(shared): State<Arc<Shared>>, Json(body): Json<SortBody>) -> StatusCode {
+    let Some(sort) = crate::board::analysis::Sort::from_key(&body.by) else {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    };
+    shared.lock().set_sort(sort);
     shared.publish();
     StatusCode::NO_CONTENT
 }

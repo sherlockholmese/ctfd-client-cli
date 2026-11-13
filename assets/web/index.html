@@ -213,6 +213,7 @@
                   <th scope="col" class="hide-sm col-cat">Category</th>
                   <th class="num" scope="col">Points</th>
                   <th class="num" scope="col" id="th-top">Top 10</th>
+                  <th class="num hide-sm col-when" scope="col" title="How far into the CTF the rival solved it">Rival at</th>
                   <th class="num hide-sm col-extra" scope="col">Running</th>
                 </tr>
               </thead>
@@ -254,6 +255,7 @@
                   <th scope="col">Challenge</th>
                   <th scope="col" class="hide-sm col-cat">Category</th>
                   <th class="num" scope="col">Points</th>
+                  <th class="num hide-sm col-when" scope="col" title="How far into the CTF you solved it">You at</th>
                 </tr>
               </thead>
               <tbody id="edge-body"></tbody>
@@ -277,11 +279,12 @@
           <div class="ladder">
             <div class="rung rung-head" aria-hidden="true">
               <span></span><span class="num">#</span><span id="th-ladder-name">Team</span>
-              <span class="num">Gap</span><span class="num" title="Points in the last hour">1 h</span>
+              <span class="num">Gap</span><span class="num" title="Points per hour over the last 3 hours">Pace</span>
               <span class="num" title="Solves on the likeliest route past them">To pass</span>
               <span class="num" title="Chance of landing every solve on that route">Odds</span>
             </div>
             <div id="ladder" role="radiogroup" aria-labelledby="aim-title"></div>
+            <p class="rail-note" id="pace-note"></p>
           </div>
 
           <div class="focus">
@@ -313,11 +316,13 @@
             <table class="table table-roomy">
               <thead>
                 <tr>
-                  <th scope="col">Best targets</th>
+                  <th scope="col"><button class="sort" type="button" data-sort="likely" title="Order by likely points">Best targets</button></th>
                   <th scope="col" class="hide-sm col-cat">Category</th>
                   <th scope="col" class="col-diff" title="The organisers' tag when there is one, else estimated from solves and points">Difficulty</th>
-                  <th class="num" scope="col">Points</th>
-                  <th class="num" scope="col" title="Your estimated chance: the share of teams that solved it, weighed against its difficulty and how you do in its category">Odds</th>
+                  <th class="num" scope="col"><button class="sort" type="button" data-sort="points">Points</button></th>
+                  <th class="num" scope="col" title="Your estimated chance: the share of teams that solved it, weighed against its difficulty and how you do in its category"><button class="sort" type="button" data-sort="odds">Odds</button></th>
+                  <th class="num col-time" scope="col" title="How long it should take you: what it took the teams that solved it, at your pace"><button class="sort" type="button" data-sort="time">Time</button></th>
+                  <th class="num col-rate" scope="col" title="Likely points per hour of that time"><button class="sort" type="button" data-sort="per_hour">Per hour</button></th>
                   <th scope="col" class="hide-sm col-why">Why</th>
                 </tr>
               </thead>
@@ -325,6 +330,11 @@
             </table>
             <p class="empty" id="targets-empty" hidden></p>
           </div>
+          <!-- Everything known about the picked target. -->
+          <section class="signals" id="signals" aria-live="polite" aria-labelledby="signals-title">
+            <h3 class="card-title" id="signals-title"></h3>
+            <dl class="facts" id="facts"></dl>
+          </section>
         </article>
       </div>
     </section>
@@ -346,6 +356,8 @@
       <div><dt><kbd>/</kbd></dt><dd>Find a team</dd></div>
       <div><dt><kbd>M</kbd></dt><dd>Jump to you (Board), rival above you (Analysis), default goal (Plan)</dd></div>
       <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Rival one place up or down (Analysis), goal one place up or down (Plan)</dd></div>
+      <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick a target to see its details (Plan)</dd></div>
+      <div><dt><kbd>S</kbd></dt><dd>Order targets: likely points, per hour, odds, points, time (Plan)</dd></div>
       <div><dt><kbd>T</kbd></dt><dd>Graph range: all, 24h to 30m</dd></div>
       <div><dt><kbd>L</kbd></dt><dd>Board layout: split, graph, table</dd></div>
       <div><dt><kbd>?</kbd></dt><dd>This list</dd></div>

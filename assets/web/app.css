@@ -624,6 +624,11 @@ tr.closes td span {
 }
 .rung .num { text-align: right; }
 .rung-head { min-height: 28px; border-top: 0; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
+.rail-note {
+  padding: 8px var(--inset) 0; border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--muted-foreground);
+}
+.rail-note:empty { display: none; }
 .rung-pos { color: var(--muted-foreground); }
 .rung-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 8px; align-items: center; min-width: 0; }
 .rung-name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
@@ -661,7 +666,36 @@ button.rung[aria-checked="true"] .radio::after {
 .diff[data-tagged="false"] { color: var(--muted-foreground); }
 .targets-card { container-type: inline-size; }
 .targets-card .table-scroll { flex: 1 1 0; min-height: 320px; }
-.table-roomy td { height: 44px; }
+.table-roomy td { height: 40px; }
+.table-roomy tbody tr:not(.closes) { cursor: pointer; }
+tr.is-picked { background: var(--row-you); }
+tr.is-picked:hover { background: var(--row-you); }
+/* The name is the control that picks a target; it reads as the name. */
+.pick {
+  appearance: none; border: 0; background: transparent; padding: 0; cursor: pointer;
+  text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+/* Column heads that order the list; the active one says so with an arrow. */
+.sort {
+  appearance: none; border: 0; background: transparent; padding: 0; cursor: pointer;
+  font: inherit; color: inherit; border-radius: 4px;
+}
+.sort:hover { color: var(--foreground); }
+th[aria-sort] .sort { color: var(--foreground); }
+th[aria-sort] .sort::after { content: " ↓"; }
+th[aria-sort="ascending"] .sort::after { content: " ↑"; }
+.guess { color: var(--muted-foreground); }
+
+/* Details of the picked target: every signal, labelled. */
+.signals {
+  flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
+  display: grid; gap: 8px;
+}
+.facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 24px; }
+.facts > div { display: grid; gap: 0; min-width: 0; align-content: start; }
+.facts > .wide { grid-column: 1 / -1; }
+.facts dt { font-size: 12px; color: var(--muted-foreground); }
+.facts dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
 
 /* A solve on the route to the goal: a rail, a step number, full weight. */
 tr.on-route td:first-child { box-shadow: inset 2px 0 0 var(--foreground); }
@@ -767,6 +801,8 @@ kbd {
   /* Plan: the rail and the answer at full height. */
   #plan-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
   .targets-card .table-scroll { min-height: 0; }
+  /* The details never crowd out the list: they scroll past a third. */
+  .signals { max-height: 38%; overflow-y: auto; overscroll-behavior: contain; }
   .ladder { flex: none; }
   .focus { flex: 1; }
 }
@@ -791,9 +827,15 @@ kbd {
   .rung > :nth-child(5) { display: none; }
 }
 @container (max-width: 460px) {
-  .col-diff { display: none; }
+  .col-diff, .col-rate { display: none; }
 }
-@container (max-width: 600px) {
+@container (max-width: 560px) {
+  .col-when { display: none; }
+}
+@container (max-width: 400px) {
+  .col-time { display: none; }
+}
+@container (max-width: 780px) {
   .col-why { display: none; }
   .plan-headline { font-size: 20px; }
 }

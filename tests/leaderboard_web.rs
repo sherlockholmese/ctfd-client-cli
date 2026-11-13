@@ -261,7 +261,11 @@ async fn page_actions_change_the_rival_and_pins() {
     assert_eq!(board.post("goal", json!({"key": "id:99"})).await, 404);
     assert_eq!(board.post("goal", json!({"key": "id:1"})).await, 204);
     assert_eq!(board.post("goal", json!({"key": null})).await, 204);
+    // The Plan's order.
+    assert_eq!(board.post("sort", json!({"by": "nonsense"})).await, 422);
+    assert_eq!(board.post("sort", json!({"by": "per_hour"})).await, 204);
     let state = board.state().await;
+    assert_eq!(state["plan"]["sort"], "per_hour");
     assert!(state["plan"]["ladder"].is_array());
     assert!(state["notices"].is_array());
 

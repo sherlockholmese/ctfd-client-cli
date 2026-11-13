@@ -185,6 +185,9 @@ fn analysis_wide_shows_every_section() {
         "Points by category",
         "Unsolved by both",
         "Your edge",
+        // How far into the CTF the rival, and you, solved things.
+        "Rival at",
+        "You at",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
     }
@@ -318,6 +321,14 @@ fn plan_ranks_targets_and_the_climb() {
         "2 solves to pass #5",
         "chance of landing all",
         "Level",
+        "Pace",
+        "Time",
+        "You solve about every",
+        // The highlighted target's details, solve times included.
+        "Typical time",
+        "First solve",
+        "Solved at",
+        "Teams ahead of you",
         "Best targets",
         "↑ passes",
         "Aim for",
@@ -338,6 +349,24 @@ fn plan_ranks_targets_and_the_climb() {
     // The ladder holds the leaders and the teams around you, in rank order.
     let ranks: Vec<i64> = plan.ladder.iter().map(|r| r.pos).collect();
     assert_eq!(ranks, [1, 2, 3, 4, 5, 7, 8]);
+
+    // s orders the targets off the route; the route stays first.
+    use crate::board::analysis::Sort;
+    app.on_key(key(KeyCode::Char('s')));
+    assert_eq!(app.board.plan.sort, Sort::PerHour);
+    let listed = app.board.plan.listed();
+    let rest = &listed[app.board.plan.route().len()..];
+    assert!(
+        rest.windows(2)
+            .all(|w| w[0].per_hour.unwrap_or(0.0) >= w[1].per_hour.unwrap_or(0.0)),
+        "best points per hour first"
+    );
+    assert!(text(&draw(&mut app, 160, 44)).contains("/h↓"));
+    for _ in 0..4 {
+        app.on_key(key(KeyCode::Char('s')));
+    }
+    assert_eq!(app.board.plan.sort, Sort::Likely);
+    let plan = &app.board.plan;
 
     // The route leads the list, and <- moves the goal up the board.
     assert_eq!(plan.goal, Some(5));

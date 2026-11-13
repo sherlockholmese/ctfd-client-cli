@@ -179,6 +179,22 @@ pub struct Rung {
     pub route: Vec<u64>,
     /// Chance of landing the whole route.
     pub route_odds: Option<f64>,
+    /// Your time for the whole route, in seconds, where every step has one.
+    pub route_time: Option<i64>,
+    /// Points per hour over the last three hours.
+    pub pace: Option<f64>,
+    /// Seconds until you draw level at both current paces; `None` when
+    /// you are not closing in (or their solves are unknown).
+    pub catch_in: Option<i64>,
+}
+
+/// Solve times over the accounts whose solves are known.
+struct SolveTimes {
+    timing: HashMap<u64, analysis::Timing>,
+    /// Seconds between your solves, typically; `None` until you have a few.
+    my_typical: Option<i64>,
+    /// The same over everyone else tracked.
+    field_typical: Option<i64>,
 }
 
 /// What a notice is about; the views pick its tone from this.
@@ -244,9 +260,29 @@ pub struct Plan {
     /// last qualifying place when you are outside it, else the team above
     /// you.
     pub goal: Option<i64>,
+    /// How the targets off the route are ordered.
+    pub sort: analysis::Sort,
+    /// Your points per hour over the last three hours.
+    pub my_pace: Option<f64>,
+    /// Seconds between your solves, typically, and the tracked field's.
+    pub my_typical: Option<i64>,
+    pub field_typical: Option<i64>,
+    /// When scoring began (Unix time).
+    pub start: i64,
+    /// Accounts above you whose solves are known.
+    pub ahead_tracked: usize,
+    pub field: Option<analysis::Field>,
 }
 
 impl Plan {
+    /// The details of one target, as labelled lines.
+    pub fn facts(&self, target: &analysis::Target, now: i64) -> Vec<analysis::Fact> {
+        match self.field {
+            Some(field) => target.facts(field, now, self.start, self.ahead_tracked),
+            None => Vec::new(),
+        }
+    }
+
     /// The rung the route aims to pass.
     pub fn goal_rung(&self) -> Option<&Rung> {
         let pos = self.goal?;
@@ -265,18 +301,58 @@ impl Plan {
             .unwrap_or_default()
     }
 
-    /// Targets off the route, most likely points first.
+    /// Targets off the route, in the picked order.
     pub fn off_route(&self) -> Vec<&analysis::Target> {
         let on: &[u64] = self.goal_rung().map(|r| r.route.as_slice()).unwrap_or(&[]);
-        self.targets
+        let mut rest: Vec<&analysis::Target> = self
+            .targets
             .iter()
             .filter(|t| !on.contains(&t.stat.id))
-            .collect()
+            .collect();
+        rest.sort_by(|a, b| self.sort.compare(a, b));
+        rest
+    }
+
+    /// How often you solve against the tracked field, and whether you
+    /// are closing on the goal, in a sentence or two.
+    pub fn pace_note(&self) -> String {
+        let mut note = Vec::new();
+        match (self.my_typical, self.field_typical) {
+            (Some(mine), Some(field)) => note.push(format!(
+                "You solve about every {}, the teams tracked every {}.",
+                analysis::span_text(mine),
+                analysis::span_text(field)
+            )),
+            (None, Some(field)) => note.push(format!(
+                "The teams tracked solve about every {}.",
+                analysis::span_text(field)
+            )),
+            _ => {}
+        }
+        if let (Some(goal), Some(_)) = (self.goal_rung(), self.my_pace) {
+            match (goal.catch_in, goal.pace) {
+                (Some(secs), _) => note.push(format!(
+                    "Level with #{} in about {} at the last 3 hours' pace.",
+                    goal.pos,
+                    analysis::span_text(secs)
+                )),
+                (None, Some(_)) => note.push(format!(
+                    "#{} has scored at least as fast as you over the last 3 hours.",
+                    goal.pos
+                )),
+                _ => {}
+            }
+        }
+        note.join(" ")
+    }
+
+    /// The route, then the rest: the order the views list targets in.
+    pub fn listed(&self) -> Vec<&analysis::Target> {
+        let mut all = self.route();
+        all.extend(self.off_route());
+        all
     }
 }
-
-/// How far back a solve counts as recent, in seconds.
-const RECENT_SECS: i64 = 3600;
 
 /// Teams always on the ladder, from the top.
 const LADDER_TOP: i64 = 3;
@@ -310,6 +386,8 @@ pub struct BoardModel {
     pub rival_key: Option<String>,
     /// Account picked as the Plan goal; `None` follows the default.
     pub goal_key: Option<String>,
+    /// How the Plan orders the targets off the route.
+    pub plan_sort: analysis::Sort,
     pub pins: Vec<u64>,
     /// Recent notices, oldest first.
     pub notices: std::collections::VecDeque<Notice>,
@@ -360,6 +438,7 @@ impl BoardModel {
             data,
             rival_key: None,
             goal_key: None,
+            plan_sort: analysis::Sort::default(),
             pins: Vec::new(),
             notices: Default::default(),
             next_notice: 1,
@@ -613,6 +692,12 @@ impl BoardModel {
     pub fn set_goal(&mut self, key: String) {
         self.goal_key = Some(key);
         self.rebuild_h2h();
+    }
+
+    /// Order the Plan's targets by `sort`.
+    pub fn set_sort(&mut self, sort: analysis::Sort) {
+        self.plan_sort = sort;
+        self.plan.sort = sort;
     }
 
     /// Go back to the default goal.
@@ -960,27 +1045,83 @@ impl BoardModel {
         challenges
     }
 
-    /// Solves per challenge in the last hour, over every account whose
-    /// solves are known (the graphed top, pins, you and the rival).
-    fn recent_solves(&self) -> HashMap<u64, usize> {
+    /// When scoring began: the configured start, else the earliest solve
+    /// known (close to the start once a few teams have scored).
+    fn start_time(&self) -> i64 {
+        self.since.unwrap_or_else(|| {
+            self.tracked_ids()
+                .into_iter()
+                .filter_map(|id| self.changes_for(Some(id)))
+                .flatten()
+                .map(|c| c.t)
+                .min()
+                .unwrap_or(self.now)
+        })
+    }
+
+    /// Accounts whose solves are known: the graphed top, pins, you and
+    /// the rival.
+    fn tracked_ids(&self) -> Vec<u64> {
         let mut ids: Vec<u64> = self.data.top.iter().filter_map(|t| t.id).collect();
         ids.extend(self.data.accounts.keys().copied());
         ids.sort_unstable();
         ids.dedup();
-        let mut recent: HashMap<u64, usize> = HashMap::new();
-        for id in ids {
-            let solved: HashSet<u64> = self
-                .changes_for(Some(id))
-                .iter()
-                .flatten()
-                .filter(|c| c.t >= self.now - RECENT_SECS)
-                .filter_map(|c| c.challenge_id)
-                .collect();
-            for challenge in solved {
-                *recent.entry(challenge).or_default() += 1;
+        ids
+    }
+
+    /// Solve times over every tracked account: per challenge who solved
+    /// it when and how long after their previous solve, plus how long a
+    /// solve typically takes you and the field.
+    fn solve_times(&self, start: i64) -> SolveTimes {
+        let mut by_challenge: HashMap<u64, Vec<(i64, i64, String)>> = HashMap::new();
+        let mut all_spans = Vec::new();
+        let mut my_spans = Vec::new();
+        for id in self.tracked_ids() {
+            let mut history = self.changes_for(Some(id)).unwrap_or_default();
+            history.sort_by_key(|c| c.t);
+            let name = self.name_of(id);
+            let mut previous = start;
+            let mut seen = HashSet::new();
+            for c in history {
+                let span = (c.t - previous).max(0);
+                previous = previous.max(c.t);
+                let Some(challenge) = c.challenge_id else {
+                    continue;
+                };
+                if !seen.insert(challenge) {
+                    continue;
+                }
+                by_challenge
+                    .entry(challenge)
+                    .or_default()
+                    .push((c.t, span, name.clone()));
+                if Some(id) == self.me_account {
+                    my_spans.push(span);
+                } else {
+                    all_spans.push(span);
+                }
             }
         }
-        recent
+        let timing = by_challenge
+            .into_iter()
+            .map(|(challenge, mut solves)| {
+                solves.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
+                let timing = analysis::Timing {
+                    times: solves.iter().map(|s| s.0).collect(),
+                    spans: solves.iter().map(|s| s.1).collect(),
+                    solvers: solves.into_iter().map(|s| s.2).collect(),
+                };
+                (challenge, timing)
+            })
+            .collect();
+        SolveTimes {
+            timing,
+            // A pace needs a few solves behind it.
+            my_typical: (my_spans.len() >= 3)
+                .then(|| analysis::quantile(&my_spans, 0.5))
+                .flatten(),
+            field_typical: analysis::quantile(&all_spans, 0.5),
+        }
     }
 
     fn rebuild_plan(
@@ -1006,10 +1147,34 @@ impl BoardModel {
             ranked: standings.len(),
             top_n: self.data.top.len().min(self.top_n as usize),
         };
-        let recent = self.recent_solves();
+        let start = self.start_time();
+        let times = self.solve_times(start);
+        // How many tracked accounts above you have each challenge.
+        let tracked = self.tracked_ids();
+        let above: Vec<u64> = standings[..me]
+            .iter()
+            .filter_map(|e| e.account_id)
+            .filter(|id| tracked.contains(id))
+            .collect();
+        let mut ahead: HashMap<u64, usize> = HashMap::new();
+        for id in &above {
+            let solved: HashSet<u64> = self
+                .changes_for(Some(*id))
+                .iter()
+                .flatten()
+                .filter_map(|c| c.challenge_id)
+                .collect();
+            for challenge in solved {
+                *ahead.entry(challenge).or_default() += 1;
+            }
+        }
         let signals = analysis::Signals {
-            recent: &recent,
+            timing: &times.timing,
             rival: theirs,
+            ahead: &ahead,
+            my_typical: times.my_typical,
+            field_typical: times.field_typical,
+            now: self.now,
         };
         let (mut targets, focus) = analysis::targets(
             challenges, mine, top_counts, field, signals, my_score, &others,
@@ -1032,6 +1197,9 @@ impl BoardModel {
             }
         }
 
+        let my_pace = self
+            .momentum(standings[me].account_id)
+            .map(|m| m.last_3h as f64 / 3.0);
         // The last qualifying place, while you are outside it.
         let line = self
             .cutoff
@@ -1050,15 +1218,31 @@ impl BoardModel {
             .map(|(_, e)| {
                 let ahead = e.score - my_score;
                 let route = analysis::route(&targets, ahead);
+                let momentum = self.momentum(e.account_id);
+                let pace = momentum.map(|m| m.last_3h as f64 / 3.0);
+                let catch_in = match (my_pace, pace) {
+                    (Some(mine), Some(theirs)) if ahead >= 0 && mine > theirs => {
+                        Some(((ahead + 1) as f64 / (mine - theirs) * 3600.0).round() as i64)
+                    }
+                    _ => None,
+                };
                 Rung {
                     pos: e.pos,
                     account: e.account_id,
                     name: e.name.clone(),
                     score: e.score,
                     ahead,
-                    momentum: self.momentum(e.account_id),
+                    momentum,
+                    pace,
+                    catch_in,
                     to_pass: route.as_ref().map(|r| (r.picks.len(), r.points)),
                     route_odds: route.as_ref().map(|r| r.odds),
+                    route_time: route.as_ref().and_then(|r| {
+                        r.picks
+                            .iter()
+                            .map(|&i| targets[i].time)
+                            .sum::<Option<i64>>()
+                    }),
                     route: route
                         .map(|r| r.picks.iter().map(|&i| targets[i].stat.id).collect())
                         .unwrap_or_default(),
@@ -1079,6 +1263,13 @@ impl BoardModel {
             targets,
             focus,
             goal,
+            sort: self.plan_sort,
+            my_pace,
+            my_typical: times.my_typical,
+            field_typical: times.field_typical,
+            start,
+            ahead_tracked: above.len(),
+            field: Some(field),
         };
     }
 
@@ -1116,7 +1307,26 @@ impl BoardModel {
         }
 
         let challenges = self.known_challenges();
-        let comparison = analysis::compare(&challenges, &mine, &theirs, &top_counts);
+        let when = |history: &Option<Vec<ScoreChange>>| -> HashMap<u64, i64> {
+            let mut at = HashMap::new();
+            for c in history.iter().flatten() {
+                if let Some(id) = c.challenge_id {
+                    at.entry(id).or_insert(c.t);
+                }
+            }
+            at
+        };
+        let (mine_at, theirs_at) = (when(&my_history), when(&rival_history));
+        let comparison = analysis::compare(
+            &challenges,
+            &mine,
+            &theirs,
+            &top_counts,
+            analysis::SolvedAt {
+                mine: &mine_at,
+                theirs: &theirs_at,
+            },
+        );
         self.rebuild_plan(&challenges, &mine, &theirs, &top_counts);
         let standings = &self.data.standings;
 
