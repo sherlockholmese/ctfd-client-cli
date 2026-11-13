@@ -118,6 +118,27 @@ pub struct Challenge {
     /// Number of accounts that solved it (CTFd 3.x reports this).
     #[serde(default)]
     pub solves: Option<u64>,
+    /// Tags, where the list carries them; organisers often tag difficulty.
+    #[serde(default, deserialize_with = "list_tags")]
+    pub tags: Vec<String>,
+}
+
+/// Tags as the challenge list sends them: plain strings, or objects with
+/// a `value`.  Anything else is skipped.
+fn list_tags<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let raw: Option<Vec<serde_json::Value>> = Option::deserialize(d)?;
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|tag| match tag {
+            serde_json::Value::String(s) => Some(s),
+            serde_json::Value::Object(mut o) => match o.remove("value") {
+                Some(serde_json::Value::String(s)) => Some(s),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect())
 }
 
 /// Detailed information about a single challenge.

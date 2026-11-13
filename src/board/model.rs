@@ -952,6 +952,7 @@ impl BoardModel {
                 value: values.get(&id).copied().unwrap_or(0),
                 solved_by_me: false,
                 solves: None,
+                tags: Vec::new(),
             })
             .collect();
         extra.sort_by_key(|c| c.id);

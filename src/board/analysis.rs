@@ -160,6 +160,111 @@ pub fn compare(
     }
 }
 
+/// How hard a challenge is, in four steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    Easy,
+    Medium,
+    Hard,
+    Extreme,
+}
+
+impl Level {
+    pub fn label(self) -> &'static str {
+        match self {
+            Level::Easy => "Easy",
+            Level::Medium => "Medium",
+            Level::Hard => "Hard",
+            Level::Extreme => "Extreme",
+        }
+    }
+
+    /// Stable key for the web page.
+    pub fn key(self) -> &'static str {
+        match self {
+            Level::Easy => "easy",
+            Level::Medium => "medium",
+            Level::Hard => "hard",
+            Level::Extreme => "extreme",
+        }
+    }
+
+    /// Chance that a team solves a challenge of this level, before any
+    /// solve counts are in.
+    fn prior(self) -> f64 {
+        match self {
+            Level::Easy => 0.6,
+            Level::Medium => 0.3,
+            Level::Hard => 0.12,
+            Level::Extreme => 0.04,
+        }
+    }
+
+    /// The level an organiser's tag names, if it names one.
+    fn from_tag(tag: &str) -> Option<Self> {
+        let tag = tag.trim().to_lowercase();
+        let tag = tag.strip_prefix("difficulty:").unwrap_or(&tag).trim();
+        Some(match tag {
+            "baby" | "warmup" | "warm-up" | "beginner" | "intro" | "trivial" | "easy" => {
+                Level::Easy
+            }
+            "medium" | "normal" | "intermediate" | "moderate" => Level::Medium,
+            "hard" | "difficult" | "advanced" => Level::Hard,
+            "insane" | "expert" | "extreme" | "nightmare" | "very hard" | "brutal" => {
+                Level::Extreme
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// A challenge's difficulty and where the reading comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Difficulty {
+    pub level: Level,
+    /// From an organiser's tag, rather than estimated from solves and
+    /// points.
+    pub tagged: bool,
+}
+
+/// Solve share at or above which a challenge reads as easy on solves
+/// alone, and at or below which as hard as it gets.
+const SHARE_EASY: f64 = 0.5;
+const SHARE_HARDEST: f64 = 0.02;
+
+/// Read a challenge's difficulty: its tag when it has one, else an
+/// estimate from how few solved it (`share`, when the board has solves)
+/// and where its points sit between the cheapest and dearest challenge
+/// (`points`, 0..=1, when values differ).  Solves count double.
+fn difficulty(tags: &[String], share: Option<f64>, points: Option<f64>) -> Difficulty {
+    if let Some(level) = tags.iter().find_map(|t| Level::from_tag(t)) {
+        return Difficulty {
+            level,
+            tagged: true,
+        };
+    }
+    let by_share = share.map(|s| {
+        let s = s.clamp(SHARE_HARDEST, SHARE_EASY);
+        (SHARE_EASY / s).ln() / (SHARE_EASY / SHARE_HARDEST).ln()
+    });
+    let score = match (by_share, points) {
+        (Some(s), Some(p)) => (2.0 * s + p) / 3.0,
+        (Some(s), None) => s,
+        (None, Some(p)) => p,
+        (None, None) => 0.4,
+    };
+    let level = match score {
+        s if s < 0.25 => Level::Easy,
+        s if s < 0.5 => Level::Medium,
+        s if s < 0.8 => Level::Hard,
+        _ => Level::Extreme,
+    };
+    Difficulty {
+        level,
+        tagged: false,
+    }
+}
+
 /// Why a target stands out, when something does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
@@ -207,8 +312,10 @@ pub struct Target {
     pub stat: ChallengeStat,
     /// Share of accounts that solved it (0..=1): a stand-in for difficulty.
     pub share: f64,
-    /// Your estimated chance of solving it (0..=1): `share`, shifted by
-    /// how you do in its category compared with your average.
+    pub difficulty: Difficulty,
+    /// Your estimated chance of solving it (0..=1): `share` weighed
+    /// against what its difficulty suggests, then shifted by how you do
+    /// in its category compared with your average.
     pub odds: f64,
     /// Points weighted by `odds`: what an attempt is likely worth.
     pub expected: f64,
@@ -303,17 +410,38 @@ pub fn targets(
         _ if field.top_n > 0 => Some((top.min(field.top_n), field.top_n)),
         _ => None,
     };
+    // Solve counts say nothing about difficulty until someone has solved
+    // something; point values only when they differ.
+    let top_of = |c: &Challenge| top_counts.get(&c.id).copied().unwrap_or(0);
+    let board_has_solves = challenges
+        .iter()
+        .any(|c| solved_by(c, top_of(c)).is_some_and(|(n, _)| n > 0));
+    let cheapest = challenges.iter().map(|c| c.value).min().unwrap_or(0);
+    let dearest = challenges.iter().map(|c| c.value).max().unwrap_or(0);
     let mut list: Vec<Target> = challenges
         .iter()
         .filter(|c| !mine.contains(&c.id))
         .map(|c| {
-            let top_solves = top_counts.get(&c.id).copied().unwrap_or(0);
+            let top_solves = top_of(c);
             let known = solved_by(c, top_solves);
             let share = known.map_or(0.0, |(n, of)| n as f64 / of as f64);
             let (cat_mine, cat_total) = record[c.category.as_str()];
             let fit = strength(cat_mine, cat_total, all_mine, challenges.len());
-            // Smoothed so an unsolved challenge is unlikely, not impossible.
-            let base = known.map_or(0.0, |(n, of)| (n as f64 + 0.5) / (of as f64 + 1.0));
+            let difficulty = difficulty(
+                &c.tags,
+                known.filter(|_| board_has_solves).map(|_| share),
+                (dearest > cheapest)
+                    .then(|| (c.value - cheapest) as f64 / (dearest - cheapest) as f64),
+            );
+            // The solve share, pulled toward what the difficulty suggests
+            // by a prior worth a twentieth of the field (at least four
+            // teams): early on the difficulty leads, later the solves do,
+            // and an unsolved challenge is unlikely, not impossible.
+            let prior = difficulty.level.prior();
+            let base = known.map_or(prior, |(n, of)| {
+                let weight = (of as f64 / 20.0).max(4.0);
+                (n as f64 + weight * prior) / (of as f64 + weight)
+            });
             let scaled = base / (1.0 - base) * fit;
             let odds = scaled / (1.0 + scaled);
             let recent = signals.recent.get(&c.id).copied().unwrap_or(0);
@@ -340,6 +468,7 @@ pub fn targets(
                     top_solves,
                 },
                 share,
+                difficulty,
                 odds,
                 expected: c.value as f64 * odds,
                 recent,
@@ -688,6 +817,10 @@ mod tests {
                 top_solves: 0,
             },
             share: odds,
+            difficulty: Difficulty {
+                level: Level::Medium,
+                tagged: false,
+            },
             odds,
             expected: value as f64 * odds,
             recent: 0,
@@ -704,6 +837,63 @@ mod tests {
             .iter()
             .map(|&i| list[i].stat.name.clone())
             .collect()
+    }
+
+    #[test]
+    fn difficulty_comes_from_tags_then_from_solves_and_points() {
+        let tag = |t: &str| vec![t.to_string()];
+        let d = difficulty(&tag("Easy"), Some(0.01), Some(1.0));
+        assert_eq!((d.level, d.tagged), (Level::Easy, true), "the tag wins");
+        let d = difficulty(&tag("difficulty: insane"), None, None);
+        assert_eq!((d.level, d.tagged), (Level::Extreme, true));
+        let d = difficulty(&tag("web"), Some(0.6), Some(0.0));
+        assert_eq!((d.level, d.tagged), (Level::Easy, false), "not a level");
+
+        let level = |share, points| difficulty(&[], share, points).level;
+        assert_eq!(level(Some(0.6), Some(0.1)), Level::Easy);
+        assert_eq!(level(Some(0.2), Some(0.5)), Level::Medium);
+        assert_eq!(level(Some(0.05), Some(0.6)), Level::Hard);
+        assert_eq!(level(Some(0.0), Some(1.0)), Level::Extreme);
+        // Before anyone has solved anything, points are all there is.
+        assert_eq!(level(None, Some(0.1)), Level::Easy);
+        assert_eq!(level(None, Some(0.9)), Level::Extreme);
+        assert_eq!(level(None, None), Level::Medium);
+    }
+
+    #[test]
+    fn difficulty_orders_targets_nobody_has_solved() {
+        // An unsolved board: same points, same (zero) solves, so only the
+        // tags tell the targets apart.
+        let mut challenges = vec![
+            ch(1, "brutal", "Pwn", 300, 0),
+            ch(2, "gentle", "Pwn", 300, 0),
+            ch(3, "plain", "Pwn", 300, 0),
+        ];
+        challenges[0].tags = vec!["hard".into()];
+        challenges[1].tags = vec!["easy".into()];
+        let field = Field {
+            ranked: 100,
+            top_n: 10,
+        };
+        let (recent, rival) = none();
+        let signals = Signals {
+            recent: &recent,
+            rival: &rival,
+        };
+        let (list, _) = targets(
+            &challenges,
+            &set(&[]),
+            &HashMap::new(),
+            field,
+            signals,
+            0,
+            &[],
+        );
+        let names: Vec<&str> = list.iter().map(|t| t.stat.name.as_str()).collect();
+        assert_eq!(names, ["gentle", "plain", "brutal"]);
+        assert!(list[0].odds > list[1].odds && list[1].odds > list[2].odds);
+        assert_eq!(list[1].difficulty.level, Level::Medium);
+        assert!(!list[1].difficulty.tagged);
     }
 
     #[test]

@@ -561,6 +561,13 @@ tr.cutoff td span {
 .versus-table thead td { height: 32px; border-bottom: 1px solid var(--border); }
 
 .versus-table th .swatch { margin-right: 6px; }
+/* Two facts side by side: a small label over each value. */
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.pair > div { display: grid; gap: 2px; min-width: 0; }
+.pair dt { font-size: 12px; color: var(--muted-foreground); }
+.pair dd { margin: 0; display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 13.5px; }
+.pair dd > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.pair dd > span:last-child { flex: none; font-variant-numeric: tabular-nums; }
 .versus-chart { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
 
 #analysis-body .table-scroll { max-height: 420px; }
@@ -642,10 +649,16 @@ button.rung[aria-checked="true"] .radio::after {
 .likely { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
 
 /* The answer, large enough to read from across the desk. */
-.plan-head { padding: 20px var(--inset) 4px; display: grid; gap: 4px; flex: none; }
-.plan-kicker { font-size: 13px; color: var(--muted-foreground); }
-.plan-headline { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; overflow-wrap: anywhere; }
-.plan-sub { font-size: 14px; color: var(--muted-foreground); min-height: 20px; }
+.plan-head {
+  padding: 20px var(--inset) 8px; flex: none;
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 24px;
+}
+.plan-headline { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
+.plan-sub { font-size: 14px; color: var(--muted-foreground); white-space: nowrap; }
+.plan-sub b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Difficulty read off solves and points is a guess: said more quietly
+   than an organiser's tag. */
+.diff[data-tagged="false"] { color: var(--muted-foreground); }
 .targets-card { container-type: inline-size; }
 .targets-card .table-scroll { flex: 1 1 0; min-height: 320px; }
 .table-roomy td { height: 44px; }
@@ -777,9 +790,12 @@ kbd {
   .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px 36px; }
   .rung > :nth-child(5) { display: none; }
 }
+@container (max-width: 460px) {
+  .col-diff { display: none; }
+}
 @container (max-width: 600px) {
   .col-why { display: none; }
-  .plan-headline { font-size: 22px; }
+  .plan-headline { font-size: 20px; }
 }
 /* A wide feed reads as one line per solve. */
 @container (min-width: 560px) {

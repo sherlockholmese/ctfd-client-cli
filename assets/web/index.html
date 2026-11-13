@@ -197,7 +197,7 @@
             <h2 class="card-title">Points by category</h2>
             <div class="chart chart-radar" id="cat-chart" role="img" aria-label="Share of each category's points"></div>
             <p class="empty" id="cat-empty" hidden>Nothing yet</p>
-            <p class="versus-line" id="cat-note"></p>
+            <dl class="pair" id="cat-note"></dl>
           </div>
         </aside>
 
@@ -306,7 +306,6 @@
 
         <article class="card targets-card">
           <header class="plan-head" aria-live="polite">
-            <p class="plan-kicker" id="plan-kicker"></p>
             <h2 class="plan-headline" id="plan-headline"></h2>
             <p class="plan-sub" id="plan-sub"></p>
           </header>
@@ -316,8 +315,9 @@
                 <tr>
                   <th scope="col">Best targets</th>
                   <th scope="col" class="hide-sm col-cat">Category</th>
+                  <th scope="col" class="col-diff" title="The organisers' tag when there is one, else estimated from solves and points">Difficulty</th>
                   <th class="num" scope="col">Points</th>
-                  <th class="num" scope="col" title="Your estimated chance: the share of teams that solved it, adjusted for how you do in its category">Odds</th>
+                  <th class="num" scope="col" title="Your estimated chance: the share of teams that solved it, weighed against its difficulty and how you do in its category">Odds</th>
                   <th scope="col" class="hide-sm col-why">Why</th>
                 </tr>
               </thead>

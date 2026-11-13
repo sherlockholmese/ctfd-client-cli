@@ -606,10 +606,13 @@
       const gaps = cats.map((c) => ({ c, d: c.mine_points - c.theirs_points }));
       const worst = gaps.reduce((a, b) => (b.d < a.d ? b : a), { d: 0 });
       const best = gaps.reduce((a, b) => (b.d > a.d ? b : a), { d: 0 });
-      if (worst.c) note.push(`Behind most: ${worst.c.category || "Uncategorized"} ${signed(worst.d)}`);
-      if (best.c) note.push(`Ahead: ${best.c.category || "Uncategorized"} ${signed(best.d)}`);
+      const fact = (label, g, cls) =>
+        el("div", null, el("dt", { text: label }), el("dd", null, el("span", { text: g.c.category || "Uncategorized", title: g.c.category }), el("span", { class: cls, text: signed(g.d) })));
+      if (worst.c) note.push(fact("Behind most", worst, "delta-down"));
+      if (best.c) note.push(fact("Ahead most", best, "delta-up"));
     }
-    $("cat-note").textContent = note.join(". ");
+    replace($("cat-note"), note);
+    $("cat-note").hidden = note.length === 0;
     const enough = cats.length >= 3;
     $("cat-empty").hidden = enough;
     $("cat-empty").textContent = cats.length ? "Needs at least three categories" : "Nothing yet";
@@ -1147,23 +1150,19 @@
     const route = goal ? goal.route.map((id) => byId.get(id)).filter(Boolean) : [];
     const qualifying = goal && s.cutoff && goal.pos === s.cutoff;
     const aim = goal ? (qualifying ? `reach top ${s.cutoff}` : `pass #${goal.pos} ${goal.name}`) : "";
-    const where = `You are #${me.pos} with ${num(me.score)} points`;
-    let kicker = where;
+    // One line: the answer, with what it gains and how likely it is.
     let headline;
-    let sub = "";
+    let sub = [];
     if (!goal) {
       headline = plan.targets.length ? "You lead the board" : "Nothing left to solve";
     } else if (!route.length) {
-      kicker = `${where}, ${num(goal.ahead)} behind`;
       headline = `Not enough open points to ${aim}`;
     } else {
-      kicker = `${where}, ${num(goal.ahead)} behind`;
       headline = `${solvesText(route.length)} to ${aim}`;
-      sub = `+${num(goal.points)} points, ${pct(goal.odds)} chance of landing ${route.length === 1 ? "it" : "all"}`;
+      sub = [el("b", { text: `+${num(goal.points)}` }), " points, ", el("b", { text: pct(goal.odds) }), ` chance of landing ${route.length === 1 ? "it" : "all"}`];
     }
-    $("plan-kicker").textContent = kicker;
     $("plan-headline").textContent = headline;
-    $("plan-sub").textContent = sub;
+    replace($("plan-sub"), sub);
 
     // The route first, in the order to try it, closed by a line; then
     // everything else, most likely points first.
@@ -1179,6 +1178,7 @@
           el("span", { class: "chal" }, step ? el("span", { class: "step", text: step, title: `Step ${step} of the route` }) : null, el("span", { class: "chal-name", text: t.name, title: t.name })),
         ),
         el("td", { class: "hide-sm col-cat cat", text: t.category }),
+        el("td", { class: "col-diff diff", "data-tagged": String(t.difficulty_tagged), text: t.difficulty_label, title: t.difficulty_tagged ? "Tagged by the organisers" : "Estimated from solves and points" }),
         el("td", { class: "num", text: num(t.value) }),
         el(
           "td",
@@ -1191,7 +1191,7 @@
     const targets = route.map((t, i) => targetRow(t, i + 1));
     if (route.length) {
       const label = qualifying ? `Reaches top ${s.cutoff}, past ${goal.name}` : `Passes ${goal.name} for #${goal.pos}`;
-      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 5 }, el("span", { text: label }))));
+      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 6 }, el("span", { text: label }))));
     }
     for (const t of plan.targets) if (!onRoute.has(t.id)) targets.push(targetRow(t, 0));
     replace($("targets-body"), targets);

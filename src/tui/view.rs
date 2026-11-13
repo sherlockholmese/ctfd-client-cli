@@ -1372,7 +1372,7 @@ fn render_edge(f: &mut Frame, area: Rect, app: &App) {
 /// every open challenge ranked by likely points.
 fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
     let [verdict, _, rest] = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
     ])
@@ -1389,8 +1389,8 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
             .iter()
             .map(|t| fit(&t.stat.name, 64).chars().count()),
     );
-    // Step, Pts, Odds, Category, Challenge, Why.
-    let main_w = 2 + 6 + 5 + 11 + name_w.max(30) + WHY_WIDTH + 2 * 5 + 2;
+    // Step, Pts, Odds, Level, Category, Challenge, Why.
+    let main_w = 2 + 6 + 5 + 7 + 11 + name_w.max(30) + WHY_WIDTH + 2 * 6 + 2;
     let ladder_h = app.board.plan.ladder.len() as u16 + 4;
     if area.width >= main_w + PLAN_SIDE + PANEL_GAP {
         // The rail first, as on the Analysis tab: pick, then act.
@@ -1438,9 +1438,9 @@ fn solves(n: usize) -> String {
     format!("{n} {}", if n == 1 { "solve" } else { "solves" })
 }
 
-/// "Where you are, what you aim for, and what it takes."
+/// One line: what you aim for and what it takes.
 fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
-    let Some(ref me) = app.board.h2h.me else {
+    if app.board.h2h.me.is_none() {
         note(
             f,
             area,
@@ -1450,25 +1450,10 @@ fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
             ),
         );
         return;
-    };
+    }
     let plan = &app.board.plan;
     let goal = plan.goal_rung();
     let qualifying = |pos: i64| app.board.cutoff.is_some_and(|n| i64::from(n) == pos);
-    let mut first = vec![
-        Span::styled(format!("#{} {}", me.pos, fit(&me.name, 30)), theme::you()),
-        Span::raw(format!("  {} pts", pts(me.score))),
-    ];
-    if let Some(g) = goal {
-        first.push(Span::styled("   |   ", theme::muted()));
-        first.push(Span::styled(
-            format!("{} behind", pts(g.ahead)),
-            theme::negative().add_modifier(Modifier::BOLD),
-        ));
-        first.push(Span::styled(
-            format!(" #{} {}", g.pos, fit(&g.name, 28)),
-            theme::heading(),
-        ));
-    }
 
     let second = match goal {
         None if plan.targets.is_empty() => {
@@ -1477,15 +1462,17 @@ fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
         None => vec![Span::styled("You lead the board.", theme::positive())],
         Some(g) => {
             let aim = if qualifying(g.pos) {
-                format!("To reach top {}: ", g.pos)
+                format!("reach top {}", g.pos)
             } else {
-                format!("To pass #{}: ", g.pos)
+                format!("pass #{} {}", g.pos, fit(&g.name, 28))
             };
             match (g.to_pass, g.route_odds) {
                 (Some((n, gain)), Some(odds)) => vec![
-                    Span::styled(aim, theme::muted()),
-                    Span::styled(solves(n), theme::heading()),
-                    Span::styled(format!("  +{}", pts(gain)), theme::positive()),
+                    Span::styled(
+                        format!("{} to {aim}", solves(n)),
+                        theme::heading().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("   +{}", pts(gain)), theme::positive()),
                     Span::styled(
                         format!(
                             "   {} chance of landing {}",
@@ -1495,17 +1482,14 @@ fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
                         theme::muted(),
                     ),
                 ],
-                _ => vec![
-                    Span::styled(aim, theme::muted()),
-                    Span::styled("not enough open points", theme::attention()),
-                ],
+                _ => vec![Span::styled(
+                    format!("Not enough open points to {aim}"),
+                    theme::attention(),
+                )],
             }
         }
     };
-    f.render_widget(
-        Paragraph::new(vec![Line::from(first), Line::from(second)]).centered(),
-        area,
-    );
+    f.render_widget(Paragraph::new(Line::from(second)).centered(), area);
 }
 
 fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
@@ -1540,6 +1524,15 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
                 right(percent(t.odds))
                     .style(theme::popularity((t.odds * 10.0).round() as usize, 10)),
             ),
+            // An organiser's tag reads plainly, an estimate quietly.
+            Cell::from(Span::styled(
+                t.difficulty.level.label(),
+                if t.difficulty.tagged {
+                    theme::text()
+                } else {
+                    theme::muted()
+                },
+            )),
             Cell::from(Span::styled(
                 fit(&t.stat.category, 11),
                 theme::category(&t.stat.category),
@@ -1564,7 +1557,7 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             } else {
                 format!("↑ passes #{} {}", g.pos, fit(&g.name, 18))
             };
-            rows.push(rule_row(label, 6, 4));
+            rows.push(rule_row(label, 7, 5));
         }
     }
     let header = header_row(
@@ -1572,6 +1565,7 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             Cell::from(""),
             Cell::from(right("Pts")),
             Cell::from(right("Odds")),
+            Cell::from("Level"),
             Cell::from("Category"),
             Cell::from("Challenge"),
             Cell::from("Why"),
@@ -1584,6 +1578,7 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             Constraint::Length(2),
             Constraint::Length(6),
             Constraint::Length(5),
+            Constraint::Length(7),
             Constraint::Length(11),
             Constraint::Length(name_w.max(30)),
             Constraint::Length(WHY_WIDTH),

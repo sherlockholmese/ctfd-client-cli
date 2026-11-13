@@ -184,6 +184,11 @@ pub struct Target {
     #[serde(flatten)]
     pub challenge: Challenge,
     pub share: f64,
+    /// `easy`, `medium`, `hard` or `extreme`, and the word to show.
+    pub difficulty: &'static str,
+    pub difficulty_label: &'static str,
+    /// Whether the difficulty is the organisers' tag, not an estimate.
+    pub difficulty_tagged: bool,
     /// Your estimated chance of solving it (0..=1).
     pub odds: f64,
     pub expected: f64,
@@ -370,6 +375,9 @@ impl Snapshot {
                 .map(|t| Target {
                     challenge: challenge(&t.stat),
                     share: t.share,
+                    difficulty: t.difficulty.level.key(),
+                    difficulty_label: t.difficulty.level.label(),
+                    difficulty_tagged: t.difficulty.tagged,
                     odds: t.odds,
                     expected: t.expected,
                     recent: t.recent,

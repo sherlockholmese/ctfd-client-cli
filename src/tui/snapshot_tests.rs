@@ -315,10 +315,9 @@ fn plan_ranks_targets_and_the_climb() {
     export("plan-100x30", &draw(&mut app, 100, 30));
     let t = text(&buf);
     for needle in [
-        "#6 Null Pointers",
-        "behind #5",
-        "To pass #5: 2 solves",
+        "2 solves to pass #5",
         "chance of landing all",
+        "Level",
         "Best targets",
         "↑ passes",
         "Aim for",
@@ -350,7 +349,7 @@ fn plan_ranks_targets_and_the_climb() {
     }
     assert_eq!(app.board.plan.goal, Some(1));
     let t = text(&draw(&mut app, 160, 44));
-    assert!(t.contains("To pass #1: 7 solves"), "{t}");
+    assert!(t.contains("to pass #1 Heap Hoppers"), "{t}");
     export("plan-goal-160x44", &draw(&mut app, 160, 44));
     app.on_key(key(KeyCode::Char('m')));
     assert_eq!(app.board.plan.goal, Some(5));
