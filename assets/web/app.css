@@ -692,12 +692,12 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
   display: grid; gap: 8px;
 }
 .signals-head { justify-content: space-between; gap: 16px; }
-.viz { display: grid; gap: 12px 32px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.viz-block { display: grid; gap: 6px; min-width: 0; align-content: start; }
-.viz-wide { grid-column: 1 / -1; }
-.viz-label { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted-foreground); }
-.viz-label b { font-weight: 500; color: var(--foreground); font-variant-numeric: tabular-nums; }
-.viz-none { font-size: 13px; color: var(--muted-foreground); }
+/* One timeline, then four blocks of a heading over three lines: the
+   arrangement the terminal uses too. */
+.viz { display: grid; gap: 12px 32px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.viz-block { display: grid; gap: 4px; min-width: 0; align-content: start; grid-auto-rows: 20px; }
+.viz-label { font-size: 12px; color: var(--muted-foreground); }
+.viz-line { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Difficulty as four steps. */
 .level { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; flex: none; }
@@ -707,31 +707,28 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
 .level[data-tagged="false"] .pips i.on { background: var(--muted-foreground); }
 
 /* Solves over the CTF: a line from the start to now, a dot per solve, and
-   the last hour shaded. */
-.timeline { position: relative; height: 34px; }
-.timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 22px; border-top: 1px solid var(--border); }
-.timeline-recent {
-  position: absolute; top: 12px; height: 20px; right: 0; border-radius: 4px;
-  background: var(--muted); border-left: 1px dashed var(--muted-foreground);
+   the last hour shaded; beside it, the count and the first and latest. */
+.viz-timeline {
+  grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(120px, 1fr) auto auto;
+  align-items: center; gap: 12px; font-size: 13px;
 }
+.viz-summary { display: flex; gap: 20px; white-space: nowrap; color: var(--muted-foreground); padding-left: 12px; }
+.viz-summary > span:first-child { color: var(--foreground); }
+.timeline { position: relative; height: 20px; }
+.timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 9px; border-top: 1px solid var(--muted-foreground); opacity: 0.5; }
+.timeline-recent { position: absolute; top: 2px; height: 16px; right: 0; border-radius: 4px; background: var(--muted); }
 .timeline-dot {
-  position: absolute; top: 18px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%;
+  position: absolute; top: 5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%;
   background: var(--foreground); box-shadow: 0 0 0 2px var(--card);
 }
-.timeline-dot.first { background: var(--success); }
-.timeline-tag {
-  position: absolute; top: 0; font-size: 12px; line-height: 14px; white-space: nowrap;
-  color: var(--foreground); max-width: 60%; overflow: hidden; text-overflow: ellipsis;
-}
-.timeline-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted-foreground); }
 
-/* A share of a whole: a filled track, or one pip per team when few. */
-.meters { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 13px; }
-.meters .muted { font-size: 12px; }
-.meters .num { text-align: right; }
+/* A label, a bar and its count on one line. */
+.meter { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
+.meter-wide { grid-template-columns: minmax(0, 1fr) auto; }
+.meter-who { grid-template-columns: minmax(0, 1fr) auto; }
+.meter-who > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar { position: relative; height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; }
 .bar > i { position: absolute; inset: 0 auto 0 0; background: var(--foreground); border-radius: 3px; }
-.bar > i.quiet { background: var(--muted-foreground); }
 
 /* A value with its plausible range: a band and a mark on a 0 to 100 track. */
 .range { position: relative; height: 16px; }
@@ -740,12 +737,13 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
 .range-mark { position: absolute; top: 1px; width: 3px; height: 14px; margin-left: -1.5px; border-radius: 2px; background: var(--foreground); }
 
 /* How long it took the others (line: shortest to longest, box: the middle
-   half, tick: the median) and where your time falls. */
-.spans { position: relative; height: 30px; }
-.spans-line { position: absolute; top: 8px; height: 0; border-top: 1.5px solid var(--muted-foreground); }
-.spans-box { position: absolute; top: 3px; height: 11px; border-radius: 3px; background: var(--muted); border: 1px solid var(--muted-foreground); }
-.spans-median { position: absolute; top: 1px; width: 2px; height: 15px; margin-left: -1px; background: var(--foreground); }
-.spans-you { position: absolute; top: 18px; margin-left: -5px; border: 5px solid transparent; border-top: 0; border-bottom: 8px solid var(--foreground); }
+   half, tick: the median) and, under it, where your time falls.  Two of
+   the block's three lines. */
+.spans { position: relative; grid-row: span 2; }
+.spans-line { position: absolute; top: 9px; height: 0; border-top: 1.5px solid var(--muted-foreground); }
+.spans-box { position: absolute; top: 4px; height: 11px; border-radius: 3px; background: var(--muted); border: 1px solid var(--muted-foreground); }
+.spans-median { position: absolute; top: 2px; width: 2px; height: 15px; margin-left: -1px; background: var(--foreground); }
+.spans-you { position: absolute; top: 26px; margin-left: -5px; border: 5px solid transparent; border-top: 0; border-bottom: 8px solid var(--foreground); }
 .spans-you.guess { border-bottom-color: var(--muted-foreground); }
 
 /* A solve on the route to the goal: a rail, a step number, full weight. */
@@ -886,8 +884,14 @@ kbd {
 @container (max-width: 400px) {
   .col-time { display: none; }
 }
-@container (max-width: 620px) {
+@container (max-width: 700px) {
+  .viz { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .viz-timeline { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .viz-summary { grid-column: 1 / -1; padding-left: 0; }
+}
+@container (max-width: 460px) {
   .viz { grid-template-columns: minmax(0, 1fr); }
+  .viz-summary { flex-wrap: wrap; gap: 4px 16px; }
 }
 @container (max-width: 780px) {
   .col-why { display: none; }
