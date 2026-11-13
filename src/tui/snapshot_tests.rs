@@ -178,12 +178,12 @@ fn analysis_wide_shows_every_section() {
         "behind #5",
         "clear of the cut-off",
         "To pass: top",
-        "Catch up",
+        "Catch-up targets",
         "↑ enough to pass",
         "Head to head",
         "Last hour",
         "Points by category",
-        "Open for both",
+        "Unsolved by both",
         "Your edge",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
@@ -197,7 +197,7 @@ fn analysis_narrow_keeps_primary_sections() {
     let buf = draw(&mut app, 100, 30);
     export("analysis-100x30", &buf);
     let t = text(&buf);
-    assert!(t.contains("Catch up"));
+    assert!(t.contains("Catch-up targets"));
     assert!(t.contains("Points by category"));
 }
 
@@ -316,11 +316,14 @@ fn plan_ranks_targets_and_the_climb() {
     let t = text(&buf);
     for needle in [
         "#6 Null Pointers",
-        "behind #1 Heap Hoppers",
+        "behind #5",
+        "To pass #5: 2 solves",
+        "chance of landing all",
         "Best targets",
         "↑ passes",
-        "Path to the top",
+        "Aim for",
         "Where to focus",
+        "Quick win",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
     }
@@ -337,9 +340,58 @@ fn plan_ranks_targets_and_the_climb() {
     let ranks: Vec<i64> = plan.ladder.iter().map(|r| r.pos).collect();
     assert_eq!(ranks, [1, 2, 3, 4, 5, 7, 8]);
 
+    // The route leads the list, and <- moves the goal up the board.
+    assert_eq!(plan.goal, Some(5));
+    assert_eq!(plan.route().len(), 2);
+    app.on_key(key(KeyCode::Left));
+    assert_eq!(app.board.plan.goal, Some(4));
+    for _ in 0..10 {
+        app.on_key(key(KeyCode::Left));
+    }
+    assert_eq!(app.board.plan.goal, Some(1));
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("To pass #1: 7 solves"), "{t}");
+    export("plan-goal-160x44", &draw(&mut app, 160, 44));
+    app.on_key(key(KeyCode::Char('m')));
+    assert_eq!(app.board.plan.goal, Some(5));
+
     // Tab cycles Board -> Analysis -> Plan -> Board.
     app.on_key(key(KeyCode::Tab));
     assert_eq!(app.view, View::Board);
     app.on_key(key(KeyCode::BackTab));
     assert_eq!(app.view, View::Plan);
+}
+
+#[test]
+fn graph_range_cycles_and_names_itself() {
+    let mut app = demo_app(None);
+    assert!(text(&draw(&mut app, 160, 44)).contains("Score over time"));
+    app.on_key(key(KeyCode::Char('t')));
+    assert!(text(&draw(&mut app, 160, 44)).contains("Score over time, last 24h"));
+    for _ in 0..6 {
+        app.on_key(key(KeyCode::Char('t')));
+    }
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(!t.contains(", last "), "back to the whole graph\n{t}");
+}
+
+#[test]
+fn notices_show_in_the_corner_when_something_happens() {
+    let mut app = demo_app(None);
+    assert_eq!(app.board.live_notices().count(), 0, "nothing new on load");
+
+    app.apply(Update::Failed("server said no".into()));
+    let buf = draw(&mut app, 160, 44);
+    export("notice-160x44", &buf);
+    let t = text(&buf);
+    assert!(t.contains("Couldn't update the scoreboard"), "{t}");
+    assert!(t.contains("server said no"));
+    // A second failure in a row is not news.
+    app.apply(Update::Failed("server said no".into()));
+    assert_eq!(app.board.live_notices().count(), 1);
+
+    let world = demo::DemoWorld::new(series::now());
+    app.apply(Update::Data(Box::new(world.snapshot(10, &[]))));
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("Scoreboard is updating again"), "{t}");
 }

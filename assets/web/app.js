@@ -27,7 +27,8 @@
     hidden: new Set(), // series keys hidden via the legend
     linked: null, // series key highlighted from a table row
     refreshing: false,
-    goal: null, // ladder key picked as the Plan goal; null follows the server's
+    layout: "split", // board layout: split, graph, table
+    seenNotice: 0, // highest notice id already shown
   };
 
   // ------------------------------------------------------------ theme
@@ -211,6 +212,7 @@
     $("view-board").hidden = view !== "board";
     $("view-analysis").hidden = view !== "analysis";
     $("view-plan").hidden = view !== "plan";
+    $("layout").hidden = view !== "board";
     const p = new URLSearchParams(location.hash.slice(1));
     if (view === "board") p.delete("view");
     else p.set("view", view);
@@ -598,6 +600,16 @@
       .filter((c) => c.total_points > 0)
       .sort((a, b) => b.total_points - a.total_points || a.category.localeCompare(b.category));
     const node = $("cat-chart");
+    // Where the points gap comes from, in words.
+    const note = [];
+    if (theirsKnown) {
+      const gaps = cats.map((c) => ({ c, d: c.mine_points - c.theirs_points }));
+      const worst = gaps.reduce((a, b) => (b.d < a.d ? b : a), { d: 0 });
+      const best = gaps.reduce((a, b) => (b.d > a.d ? b : a), { d: 0 });
+      if (worst.c) note.push(`Behind most: ${worst.c.category || "Uncategorized"} ${signed(worst.d)}`);
+      if (best.c) note.push(`Ahead: ${best.c.category || "Uncategorized"} ${signed(best.d)}`);
+    }
+    $("cat-note").textContent = note.join(". ");
     const enough = cats.length >= 3;
     $("cat-empty").hidden = enough;
     $("cat-empty").textContent = cats.length ? "Needs at least three categories" : "Nothing yet";
@@ -1032,50 +1044,87 @@
 
   // ------------------------------------------------------------ plan
 
-  // Why a target stands out.  Keys come from the server; an unknown key
-  // shows nothing rather than the key itself.
-  const REASONS = {
-    quick_win: { label: () => "Quick win", title: "Most of the field has solved it" },
-    trending: { label: (t) => `${t.recent} solves this hour`, title: "Solved in the last hour by teams whose solves are tracked" },
-    strength: { label: () => "Your category", title: "You solve more of this category than your average" },
-    rival: { label: () => "Rival has it", title: "Solved by the team you compare with on Analysis" },
-    unsolved: { label: () => "No solves yet", title: "Nobody has solved it" },
+  // Hover text for each reason a target stands out; the words themselves
+  // come from the server, the same ones the terminal shows.
+  const REASON_TITLES = {
+    quick_win: "Most of the field has solved it",
+    trending: "Solved in the last hour by teams whose solves are tracked",
+    strength: "You solve more of this category than your average",
+    rival: "Solved by the team you compare with on Analysis",
+    unsolved: "Nobody has solved it",
   };
 
   const pct = (p) => (p > 0 && p < 0.005 ? "<1%" : `${Math.round(p * 100)}%`);
   const solvesText = (n) => `${n} ${n === 1 ? "solve" : "solves"}`;
 
-  // The rung the route aims at: the picked one while it is still ahead,
-  // else the server's default (the qualifying line, or the team above).
+  // The rung the route aims at, picked on the ladder or the server's default.
   function goalRung() {
     const plan = state.snap.plan;
-    const ahead = plan.ladder.filter((r) => r.ahead >= 0);
-    return (
-      ahead.find((r) => r.key === state.goal) ??
-      ahead.find((r) => r.pos === plan.goal) ??
-      ahead[ahead.length - 1] ??
-      null
-    );
+    return plan.ladder.find((r) => r.pos === plan.goal) ?? null;
   }
 
-  const goalSelect = $("goal");
-  goalSelect.addEventListener("change", () => {
-    state.goal = goalSelect.value;
-    renderPlan();
+  function setGoal(key) {
+    api("goal", { key }).catch(() => {});
+  }
+  function stepGoal(delta) {
+    const ahead = state.snap.plan.ladder.filter((r) => r.ahead >= 0);
+    const i = ahead.findIndex((r) => r.pos === state.snap.plan.goal);
+    const next = ahead[Math.min(ahead.length - 1, Math.max(0, i + delta))];
+    if (i >= 0 && next && next !== ahead[i]) setGoal(next.key);
+  }
+  $("goal-reset").addEventListener("click", () => setGoal(null));
+  // Arrow keys move the pick, as in any radio group.
+  $("ladder").addEventListener("keydown", (e) => {
+    const delta = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[e.key];
+    if (!delta) return;
+    e.preventDefault();
+    stepGoal(delta);
   });
 
-  // Rebuilt only when the choices change, so an open menu is left alone.
-  function renderGoalPicker(goal) {
+  function renderLadder(goal) {
     const s = state.snap;
-    const ahead = s.plan.ladder.filter((r) => r.ahead >= 0);
-    const label = (r) => (s.cutoff && r.pos === s.cutoff ? `#${r.pos} ${r.name} (top ${s.cutoff})` : `#${r.pos} ${r.name}`);
-    const signature = ahead.map((r) => `${r.key}\n${label(r)}`).join("\n\n");
-    if (goalSelect.dataset.signature !== signature) {
-      goalSelect.dataset.signature = signature;
-      replace(goalSelect, ahead.map((r) => el("option", { value: r.key, text: label(r) })));
+    const plan = s.plan;
+    const me = s.h2h.me;
+    const refocus = $("ladder").contains(document.activeElement);
+    const cells = (r) => {
+      const gap = -r.ahead;
+      const m = r.momentum;
+      return [
+        el("span", { class: `num ${gap > 0 ? "delta-up" : gap < 0 ? "delta-down" : "muted"}`, text: signed(gap) || "0" }),
+        el("span", { class: "num muted", text: m ? signed(m.last_hour) || "0" : "" }),
+        el("span", { class: "num", title: r.points ? `+${num(r.points)}` : null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
+        el("span", { class: "num muted", text: r.ahead < 0 || r.odds === null ? "" : pct(r.odds) }),
+      ];
+    };
+    const name = (text, badge) => el("span", { class: "rung-name" }, el("span", { text, title: text }), badge ? el("span", { class: "badge badge-solid badge-sm", text: badge }) : null);
+    const youRow = () =>
+      el("div", { class: "rung is-me", role: "presentation" }, el("span"), el("span", { class: "num rung-pos", text: me.pos }), name(me.name, "You"), el("span"), el("span"), el("span"), el("span"));
+    const rows = [];
+    let placed = false;
+    for (const r of plan.ladder) {
+      if (!placed && r.pos > me.pos) {
+        rows.push(youRow());
+        placed = true;
+      }
+      if (r.ahead >= 0) {
+        const on = r === goal;
+        rows.push(
+          el(
+            "button",
+            { class: "rung", type: "button", role: "radio", "aria-checked": on ? "true" : "false", tabindex: on ? "0" : "-1", "aria-label": `#${r.pos} ${r.name}`, onclick: () => setGoal(r.key) },
+            el("span", { class: "radio", "aria-hidden": "true" }),
+            el("span", { class: "num rung-pos", text: r.pos }),
+            name(r.name),
+            ...cells(r),
+          ),
+        );
+      } else {
+        rows.push(el("div", { class: "rung", role: "presentation" }, el("span"), el("span", { class: "num rung-pos", text: r.pos }), name(r.name), ...cells(r)));
+      }
     }
-    goalSelect.closest(".row").hidden = ahead.length === 0;
-    if (goal) goalSelect.value = goal.key;
+    if (!placed) rows.push(youRow());
+    replace($("ladder"), rows);
+    if (refocus) $("ladder").querySelector('[aria-checked="true"]')?.focus();
   }
 
   function renderPlan() {
@@ -1091,33 +1140,35 @@
     $("th-ladder-name").textContent = s.noun === "team" ? "Team" : "Player";
 
     const goal = goalRung();
-    renderGoalPicker(goal);
+    renderLadder(goal);
 
-    // Headline numbers.
-    const leader = plan.ladder.find((r) => r.pos === 1 && r.ahead >= 0);
-    const open = plan.targets.reduce((sum, t) => sum + t.value, 0);
-    const best = plan.targets.length ? plan.targets[plan.targets.length - 1].reach : me.pos;
-    const stat = (k, v, sub, cls) =>
-      el("div", { class: "stat plan-stat" }, el("dt", { text: k }), el("dd", { class: cls }, v, sub ? el("small", { text: sub }) : null));
-    const passIn = (r) => (r.solves ? solvesText(r.solves) : "Out of reach");
-    const gain = (r) => (r.points ? `+${num(r.points)}` : null);
-    const goalName = goal && (s.cutoff && goal.pos === s.cutoff ? `To reach top ${s.cutoff}` : `To pass #${goal.pos}`);
-    replace($("plan-stats"), [
-      stat("Rank", `#${me.pos}`, `${num(me.score)} pts`),
-      leader ? stat("Behind #1", num(leader.ahead), null, "neg") : stat("Lead", num(-(plan.ladder.find((r) => r.ahead < 0)?.ahead ?? 0)), "pts", "pos"),
-      goal && goal !== leader ? stat(goalName, passIn(goal), gain(goal)) : null,
-      leader ? stat("To take #1", passIn(leader), gain(leader)) : null,
-      stat("Open", num(open), `pts in ${plan.targets.length} ${plan.targets.length === 1 ? "challenge" : "challenges"}`),
-      stat("Best reach", `#${best}`),
-    ]);
-
-    // The route to the goal first, in the order to try it, closed by a
-    // line; then everything else, most likely points first.
+    // The answer: who you aim for, what it takes, how likely it is.
     const byId = new Map(plan.targets.map((t) => [t.id, t]));
     const route = goal ? goal.route.map((id) => byId.get(id)).filter(Boolean) : [];
+    const qualifying = goal && s.cutoff && goal.pos === s.cutoff;
+    const aim = goal ? (qualifying ? `reach top ${s.cutoff}` : `pass #${goal.pos} ${goal.name}`) : "";
+    const where = `You are #${me.pos} with ${num(me.score)} points`;
+    let kicker = where;
+    let headline;
+    let sub = "";
+    if (!goal) {
+      headline = plan.targets.length ? "You lead the board" : "Nothing left to solve";
+    } else if (!route.length) {
+      kicker = `${where}, ${num(goal.ahead)} behind`;
+      headline = `Not enough open points to ${aim}`;
+    } else {
+      kicker = `${where}, ${num(goal.ahead)} behind`;
+      headline = `${solvesText(route.length)} to ${aim}`;
+      sub = `+${num(goal.points)} points, ${pct(goal.odds)} chance of landing ${route.length === 1 ? "it" : "all"}`;
+    }
+    $("plan-kicker").textContent = kicker;
+    $("plan-headline").textContent = headline;
+    $("plan-sub").textContent = sub;
+
+    // The route first, in the order to try it, closed by a line; then
+    // everything else, most likely points first.
     const onRoute = new Set(route.map((t) => t.id));
     const targetRow = (t, step) => {
-      const reason = REASONS[t.reason];
       const field = t.solves !== null ? `${num(t.solves)} of ${num(s.standings.length)} ${s.noun}s solved it` : `${t.top_solves} of the top ${s.top_n} solved it`;
       return el(
         "tr",
@@ -1127,19 +1178,19 @@
           { class: "col-name" },
           el("span", { class: "chal" }, step ? el("span", { class: "step", text: step, title: `Step ${step} of the route` }) : null, el("span", { class: "chal-name", text: t.name, title: t.name })),
         ),
-        el("td", { class: "hide-sm cat", text: t.category }),
+        el("td", { class: "hide-sm col-cat cat", text: t.category }),
         el("td", { class: "num", text: num(t.value) }),
         el(
           "td",
           { class: "num" },
           el("span", { class: "pop", title: field }, el("span", { text: pct(t.odds) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round(t.odds * 100)}%` }))),
         ),
-        el("td", { class: "hide-sm col-why why", text: reason ? reason.label(t) : "", title: reason ? reason.title : null }),
+        el("td", { class: "hide-sm col-why why", text: t.why ?? "", title: REASON_TITLES[t.reason] ?? null }),
       );
     };
     const targets = route.map((t, i) => targetRow(t, i + 1));
     if (route.length) {
-      const label = s.cutoff && goal.pos === s.cutoff ? `Reaches top ${s.cutoff}, past ${goal.name}` : `Passes ${goal.name} for #${goal.pos}`;
+      const label = qualifying ? `Reaches top ${s.cutoff}, past ${goal.name}` : `Passes ${goal.name} for #${goal.pos}`;
       targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 5 }, el("span", { text: label }))));
     }
     for (const t of plan.targets) if (!onRoute.has(t.id)) targets.push(targetRow(t, 0));
@@ -1147,60 +1198,18 @@
     $("targets-empty").hidden = targets.length > 0;
     $("targets-empty").textContent = s.h2h.categories.length ? "Nothing left" : "Challenges aren't visible yet";
 
-    const note = $("route-note");
-    if (!goal) note.textContent = plan.targets.length ? "You lead the board" : "";
-    else if (!route.length) note.textContent = `Not enough open points to pass #${goal.pos}`;
-    else note.textContent = `${solvesText(route.length)} for +${num(goal.points)}, ${pct(goal.odds)} chance of landing ${route.length === 1 ? "it" : "all"}`;
-
-    // Ladder, with you in your place.
-    const rows = [];
-    const youRow = () =>
-      el(
-        "tr",
-        { class: "is-me" },
-        el("td", { class: "num col-rank", text: me.pos }),
-        el("td", { class: "col-name" }, el("div", { class: "team" }, el("span", { class: "team-name", text: me.name, title: me.name }), el("span", { class: "badge badge-solid badge-sm", text: "You" }))),
-        el("td"),
-        el("td", { class: "hide-sm" }),
-        el("td"),
-        el("td", { class: "hide-sm" }),
-      );
-    let placed = false;
-    for (const r of plan.ladder) {
-      if (!placed && r.pos > me.pos) {
-        rows.push(youRow());
-        placed = true;
-      }
-      const gap = -r.ahead;
-      const m = r.momentum;
-      const isGoal = r === goal;
-      rows.push(
-        el(
-          "tr",
-          { class: isGoal ? "is-goal" : null },
-          el("td", { class: "num col-rank", text: r.pos }),
-          el("td", { class: "col-name" }, el("div", { class: "team" }, el("span", { class: "team-name", text: r.name, title: r.name }), isGoal ? el("span", { class: "badge badge-outline badge-sm", text: "Goal" }) : null)),
-          el("td", { class: `num ${gap > 0 ? "delta-up" : gap < 0 ? "delta-down" : "muted"}`, text: signed(gap) || "0" }),
-          el("td", { class: "num hide-sm", text: m ? signed(m.last_hour) || "0" : "—" }),
-          el("td", { class: "num", title: r.points ? `+${num(r.points)}` : null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
-          el("td", { class: "num hide-sm muted", text: r.ahead < 0 || r.odds === null ? "" : pct(r.odds) }),
-        ),
-      );
-    }
-    if (!placed) rows.push(youRow());
-    replace($("ladder-body"), rows);
-
+    const most = Math.max(1, ...plan.focus.map((f) => f.expected));
     replace(
       $("focus-body"),
       plan.focus.map((f) =>
         el(
           "tr",
           null,
-          el("td", { class: "cat-name", text: f.category || "Uncategorized" }),
+          el("td", { class: "col-name" }, el("span", { class: "chal-name", text: f.category || "Uncategorized" })),
           el("td", { class: "num muted", text: `${f.mine}/${f.total}` }),
           el("td", { class: "num", text: num(f.open) }),
-          el("td", { class: "num hide-sm", text: num(f.points) }),
-          el("td", { class: "num", text: num(Math.round(f.expected)) }),
+          el("td", { class: "num", text: num(f.points) }),
+          el("td", { class: "num" }, el("span", { class: "likely" }, el("span", { text: num(Math.round(f.expected)) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round((f.expected / most) * 100)}%` })))),
         ),
       ),
     );
@@ -1263,6 +1272,17 @@
         : `${num(Math.abs(c.points))} short of top ${s.cutoff}`;
       gap.push(el("p", { class: "versus-line", text }));
     }
+    // What it takes to pass them, as the terminal's second line says it.
+    if (h.rival && !h.rival_loading && h.me.score < h.rival.score && h.catch_up.length) {
+      const n = h.closes_gap_at === null ? 0 : h.closes_gap_at + 1;
+      const sum = h.catch_up.slice(0, n || h.catch_up.length).reduce((a, c) => a + c.value, 0);
+      gap.push(
+        el("p", {
+          class: "versus-line",
+          text: n ? `Top ${n} catch-up ${n === 1 ? "target passes" : "targets pass"} them, +${num(sum)}` : `Catch-up targets are worth +${num(sum)}, not enough to pass`,
+        }),
+      );
+    }
     replace($("h2h-gap"), gap);
 
     // Catch-up targets.
@@ -1301,6 +1321,142 @@
     renderCategoryChart();
   }
 
+  // ------------------------------------------------------------ layout
+
+  // Board layouts, as the terminal's `l`: both, the graph alone, the tables.
+  const LAYOUTS = [
+    { value: "split", label: "Split" },
+    { value: "graph", label: "Graph" },
+    { value: "table", label: "Tables" },
+  ];
+  function applyLayout(value) {
+    const layout = LAYOUTS.find((l) => l.value === value) ?? LAYOUTS[0];
+    state.layout = layout.value;
+    $("view-board").dataset.layout = layout.value;
+    const next = LAYOUTS[(LAYOUTS.indexOf(layout) + 1) % LAYOUTS.length];
+    $("layout").setAttribute("aria-label", `Board layout: ${layout.label}. Switch to ${next.label}`);
+    $("layout").title = `Board layout: ${layout.label} (L)`;
+    requestAnimationFrame(() => progress.chart?.resize());
+  }
+  function cycleLayout() {
+    const i = LAYOUTS.findIndex((l) => l.value === state.layout);
+    const next = LAYOUTS[(i + 1) % LAYOUTS.length].value;
+    applyLayout(next);
+    try {
+      localStorage.setItem("ctfdc-layout", next);
+    } catch {
+      /* private mode: the choice lasts for this page only */
+    }
+  }
+  $("layout").addEventListener("click", cycleLayout);
+  try {
+    applyLayout(localStorage.getItem("ctfdc-layout"));
+  } catch {
+    applyLayout(null);
+  }
+
+  // ------------------------------------------------------------ notices
+
+  // What just happened, bottom right: each notice shows once, stays a few
+  // seconds (longer while pointed at or focused), and can be closed.
+  const TOAST_MS = 8000;
+  const TOAST_MAX = 4;
+  const TOAST_LOOK = {
+    your_solve: { icon: "flag", tone: "good" },
+    solve: { icon: "flag", tone: null },
+    rank_up: { icon: "up", tone: "good" },
+    rank_down: { icon: "fall", tone: "bad" },
+    failed: { icon: "alert", tone: "bad" },
+    recovered: { icon: "check", tone: "good" },
+  };
+
+  function dismissToast(node) {
+    if (node.dataset.leaving !== undefined) return;
+    clearTimeout(node.timer);
+    node.dataset.leaving = "";
+    setTimeout(() => node.remove(), 130);
+  }
+
+  function showToast(n) {
+    const look = TOAST_LOOK[n.kind] ?? TOAST_LOOK.solve;
+    const node = el(
+      "div",
+      { class: "toast", "data-tone": look.tone },
+      icon(look.icon),
+      el("div", null, el("p", { class: "toast-title", text: n.title }), n.detail ? el("p", { class: "toast-detail", text: n.detail }) : null),
+      el("button", { class: "btn btn-ghost btn-icon btn-sm", type: "button", "aria-label": "Dismiss", onclick: () => dismissToast(node) }, icon("close")),
+    );
+    const arm = () => {
+      clearTimeout(node.timer);
+      node.timer = setTimeout(() => dismissToast(node), TOAST_MS);
+    };
+    const hold = () => clearTimeout(node.timer);
+    node.addEventListener("pointerenter", hold);
+    node.addEventListener("pointerleave", arm);
+    node.addEventListener("focusin", hold);
+    node.addEventListener("focusout", arm);
+    arm();
+    const box = $("toasts");
+    box.append(node);
+    while (box.children.length > TOAST_MAX) box.firstElementChild.remove();
+  }
+
+  function renderNotices() {
+    for (const n of state.snap.notices) {
+      if (n.id <= state.seenNotice) continue;
+      state.seenNotice = n.id;
+      showToast(n);
+    }
+  }
+
+  // ------------------------------------------------------------ keys
+
+  // The terminal's keys, on the page.  Typing in a field, a held
+  // modifier, or an open dialog leaves them alone; arrow keys stay with
+  // whatever widget has focus.
+  const keysDialog = $("keys");
+  $("keys-open").addEventListener("click", () => keysDialog.showModal());
+  $("keys-close").addEventListener("click", () => keysDialog.close());
+  keysDialog.addEventListener("click", (e) => {
+    if (e.target === keysDialog) keysDialog.close();
+  });
+
+  function cycleRange() {
+    const i = ranges.findIndex((b) => b.dataset.range === state.range);
+    setRange(ranges[(i + 1) % ranges.length]);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || keysDialog.open) return;
+    const t = e.target;
+    if (t.closest("input, textarea, select, [contenteditable]")) return;
+    const arrow = e.key === "ArrowLeft" || e.key === "ArrowRight";
+    if (arrow && t.closest('[role="tablist"], [role="radiogroup"], [role="combobox"]')) return;
+    const step = { ArrowLeft: -1, h: -1, ArrowRight: 1 }[e.key] ?? (e.key === "l" && state.view !== "board" ? 1 : 0);
+    const ready = !!state.snap;
+    let handled = true;
+    if (e.key === "1") showView("board");
+    else if (e.key === "2" || e.key === "a") showView("analysis");
+    else if (e.key === "3" || e.key === "p") showView("plan");
+    else if (e.key === "?") keysDialog.showModal();
+    else if (e.key === "r") refreshBtn.click();
+    else if (e.key === "/") {
+      if (state.view !== "board") showView("board");
+      if (state.layout === "graph") applyLayout("split");
+      $("search").focus();
+    } else if (!ready) handled = false;
+    else if (e.key === "m") {
+      if (state.view === "board") $("jump-me").click();
+      else if (state.view === "analysis") $("rival-reset").click();
+      else setGoal(null);
+    } else if (step && state.view === "analysis") stepRival(step);
+    else if (step && state.view === "plan") stepGoal(step);
+    else if (e.key === "t" && state.view === "board") cycleRange();
+    else if (e.key === "l" && state.view === "board") cycleLayout();
+    else handled = false;
+    if (handled) e.preventDefault();
+  });
+
   // ------------------------------------------------------------ render
 
   function render() {
@@ -1320,6 +1476,7 @@
       renderPlan();
     }
     if (!s.refreshing) refreshBtn.removeAttribute("aria-busy");
+    renderNotices();
   }
 
   // Relative times tick without waiting for the next snapshot.

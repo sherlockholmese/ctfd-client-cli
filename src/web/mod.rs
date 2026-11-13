@@ -169,6 +169,7 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/events", get(events))
         .route("/refresh", post(refresh))
         .route("/rival", post(set_rival))
+        .route("/goal", post(set_goal))
         .route("/pin", post(set_pin))
         .layer(middleware::from_fn_with_state(shared.clone(), require_key));
 
@@ -329,6 +330,29 @@ async fn set_rival(State(shared): State<Arc<Shared>>, Json(body): Json<RivalBody
         }
     }
     shared.sync_wanted();
+    shared.publish();
+    StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct GoalBody {
+    /// Account key from the Plan ladder; `null` goes back to the default.
+    key: Option<String>,
+}
+
+async fn set_goal(State(shared): State<Arc<Shared>>, Json(body): Json<GoalBody>) -> StatusCode {
+    {
+        let mut model = shared.lock();
+        match body.key {
+            Some(key) => {
+                if model.index_of_key(&key).is_none() {
+                    return StatusCode::NOT_FOUND;
+                }
+                model.set_goal(key);
+            }
+            None => model.reset_goal(),
+        }
+    }
     shared.publish();
     StatusCode::NO_CONTENT
 }

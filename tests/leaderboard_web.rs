@@ -256,6 +256,15 @@ async fn page_actions_change_the_rival_and_pins() {
     let state = board.state().await;
     assert_eq!(state["standings"][2]["pinned"], true);
 
+    // The Plan goal: any ranked account can be asked for, and it only
+    // takes while that account is ahead of you.
+    assert_eq!(board.post("goal", json!({"key": "id:99"})).await, 404);
+    assert_eq!(board.post("goal", json!({"key": "id:1"})).await, 204);
+    assert_eq!(board.post("goal", json!({"key": null})).await, 204);
+    let state = board.state().await;
+    assert!(state["plan"]["ladder"].is_array());
+    assert!(state["notices"].is_array());
+
     assert_eq!(board.post("refresh", json!({})).await, 202);
 }
 

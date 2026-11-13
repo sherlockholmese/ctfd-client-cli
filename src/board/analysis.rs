@@ -175,6 +175,19 @@ pub enum Reason {
     Unsolved,
 }
 
+impl Target {
+    /// Why this target stands out, in a few words.
+    pub fn why(&self) -> Option<String> {
+        Some(match self.reason? {
+            Reason::QuickWin => "Quick win".into(),
+            Reason::Trending => format!("{} solves this hour", self.recent),
+            Reason::Strength => "Your category".into(),
+            Reason::Rival => "Rival has it".into(),
+            Reason::Unsolved => "No solves yet".into(),
+        })
+    }
+}
+
 impl Reason {
     /// Stable key for the web page.
     pub fn key(self) -> &'static str {

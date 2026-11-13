@@ -27,6 +27,18 @@ pub struct Snapshot {
     pub feed: Vec<Solve>,
     pub h2h: HeadToHead,
     pub plan: Plan,
+    /// What just happened, oldest first; the page shows each `id` once.
+    pub notices: Vec<Notice>,
+}
+
+#[derive(Serialize)]
+pub struct Notice {
+    pub id: u64,
+    /// `your_solve`, `solve`, `rank_up`, `rank_down`, `failed` or
+    /// `recovered`.
+    pub kind: &'static str,
+    pub title: String,
+    pub detail: String,
 }
 
 #[derive(Serialize)]
@@ -180,6 +192,8 @@ pub struct Target {
     /// Why it stands out: `quick_win`, `trending`, `strength`, `rival`
     /// or `unsolved`.
     pub reason: Option<&'static str>,
+    /// The same, as the words to show.
+    pub why: Option<String>,
     pub running: i64,
     pub reach: i64,
     /// Name of the best-ranked account this solve takes you past.
@@ -360,6 +374,7 @@ impl Snapshot {
                     expected: t.expected,
                     recent: t.recent,
                     reason: t.reason.map(|r| r.key()),
+                    why: t.why(),
                     running: t.running,
                     reach: t.reach,
                     passes: t.passes.as_ref().map(|(_, name)| name.clone()),
@@ -397,6 +412,15 @@ impl Snapshot {
             feed,
             h2h,
             plan,
+            notices: model
+                .live_notices()
+                .map(|n| Notice {
+                    id: n.id,
+                    kind: n.kind.key(),
+                    title: n.title.clone(),
+                    detail: n.detail.clone(),
+                })
+                .collect(),
         }
     }
 }

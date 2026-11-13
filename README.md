@@ -172,20 +172,22 @@ ctfdc lb --demo          # try the live view on fictional, simulated data
 
 Both views update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have three tabs (`Tab` switches in the terminal):
 
-- **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `l` switches layout.
+- **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `t` steps the graph's range (all, 24h down to 30m), `l` switches layout (split, graph only, tables only).
 - **Analysis**: you against a rival (the team above you by default; `<-`/`->` changes it). The first two lines say where you stand and what to do: how far behind or ahead you are, your margin to the qualifying line, and how many catch-up challenges it takes to pass them. Below that:
-  - **Catch up**: challenges the rival solved and you haven't, most-solved first, with a running total and a line where you'd pass them.
-  - **Open for both**: challenges neither of you has solved, ranked by how many of the top teams solved them.
+  - **Catch-up targets**: challenges the rival solved and you haven't, most-solved first, with a running total and a line where you'd pass them.
+  - **Unsolved by both**: challenges neither of you has solved, ranked by how many of the top teams solved them.
   - **Head to head**: score, solves, points in the last hour / 3 hours, time since the last solve.
   - **Points by category**: a radar of the share of each category's points you and the rival hold, with the raw numbers on hover (web) and the biggest gaps underneath (terminal).
   - **Your edge**: challenges you have that they don't.
 - **Plan**: you against the whole board, for deciding what to work on next (`3` or `Tab` again).
-  - **Best targets**: every challenge you haven't solved, ranked by expected points: its points × your odds of solving it. The odds start from the share of teams that solved it and shift with your record in its category (a category you solve more of than your average counts for you, one you solve less of against). A challenge nobody has solved is unlikely, not impossible. In the browser each target also says why it stands out: a quick win, solved several times in the last hour, in your category, already solved by your rival, or not solved by anyone.
-  - **Route** (browser): pick a team to pass, by default the last qualifying place when you are outside it, else the team above you. The solves most likely to all land that gain enough points to pass them are listed first, in the order to try them, with the points they bring and the chance of landing every one.
-  - **Path to the top**: the top 3, the teams just above you and the two just behind (and the last qualifying place), each with the gap, their last hour, and the number of solves on the likeliest route past them.
+  - **Aim for**: the top 3, the teams just above you and the two just behind (and the last qualifying place), each with the gap, their last hour, and the solves and odds of the likeliest route past them. One of the teams ahead is the goal: by default the last qualifying place when you are outside it, else the team above you. `<-`/`->` moves it, `m` goes back to the default; in the browser, click a team.
+  - **The answer**: what it takes to pass the goal, for example "3 solves to reach top 4, +931 points, 5% chance of landing all". The route is the set of solves most likely to all land that gains enough points.
+  - **Best targets**: the route first, in the order to try it, then every other challenge you haven't solved, ranked by expected points: its points × your odds of solving it. The odds start from the share of teams that solved it and shift with your record in its category (a category you solve more of than your average counts for you, one you solve less of against). A challenge nobody has solved is unlikely, not impossible. Each target can say why it stands out: a quick win, solved several times in the last hour, in your category, already solved by your rival, or not solved by anyone.
   - **Where to focus**: categories by the expected points still open, with how many of each you have solved.
 
-Press `?` in the terminal view for every key.
+Both views show a notification in the bottom right corner when something happens: a new solve (several at once are summed up), your own solve, your rank moving up or down, and an update failing or working again. Each stays for a few seconds.
+
+The browser and the terminal show the same tabs, sections and numbers, laid out the same way, and share their keys: `1` `2` `3` for the tabs, `r` to update now, `/` to find a team, `m`, `<-`/`->`, `t`, `l` as above, and `?` for the list.
 
 ### In the browser
 

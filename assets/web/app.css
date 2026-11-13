@@ -40,6 +40,10 @@
   --inset: 20px;
   --bar: 48px;
   --row: 36px;
+
+  /* Layers above the page: popovers, then notifications. */
+  --layer-popover: 20;
+  --layer-toast: 40;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -292,7 +296,7 @@ button, input, select { font: inherit; color: inherit; }
 .select-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .popover {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--layer-popover);
   width: max(100%, 280px);
   border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--popover); color: var(--foreground);
@@ -559,13 +563,6 @@ tr.cutoff td span {
 .versus-table th .swatch { margin-right: 6px; }
 .versus-chart { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
 
-.plan-grid {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap);
-}
-#plan-body { display: grid; gap: var(--gap); min-width: 0; }
-.plan-side { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
-/* Zero basis: the table scrolls inside the card instead of setting the row height. */
-.plan-grid .catch-card .table-scroll { flex: 1 1 0; height: 0; min-height: 360px; }
 #analysis-body .table-scroll { max-height: 420px; }
 
 tr.closes td {
@@ -600,46 +597,112 @@ tr.closes td span {
 
 /* ----------------------------------------------------------------- plan */
 
-.plan-hero { padding: 12px var(--inset); flex: none; }
-.plan-stats { display: flex; flex-wrap: wrap; gap: 8px 40px; margin: 0; }
-.stat { display: grid; gap: 2px; }
-.stat dt { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
-.stat dd { margin: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.plan-stat dd { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 6px; }
-.plan-stat dd small { font-size: 13px; font-weight: 400; color: var(--muted-foreground); }
-.plan-stat dd.neg { color: var(--destructive); }
-.plan-stat dd.pos { color: var(--success); }
+/* The same shape as Analysis: a rail to pick the goal from, and beside it
+   one card that answers what to solve to get there. */
+#plan-body {
+  display: grid; gap: var(--gap); min-width: 0;
+  grid-template-columns: clamp(400px, 34vw, 500px) minmax(0, 1fr);
+  align-items: start;
+}
+.plan-rail { padding: 16px 0; gap: 20px; container-type: inline-size; }
+.rail-head { justify-content: space-between; padding: 0 var(--inset); min-height: 28px; }
 
-/* Goal picker: the native control, drawn like the other selects. */
-.native-select { position: relative; display: inline-flex; }
-.native-select select {
-  appearance: none; height: 32px; max-width: 240px; padding: 0 32px 0 12px;
-  border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
-  background: transparent; box-shadow: var(--shadow-xs);
-  font-size: 13.5px; cursor: pointer; text-overflow: ellipsis;
-  transition: border-color var(--fast) ease, box-shadow var(--fast) ease, background-color var(--fast) ease;
+/* Ladder: one row per team, the ones ahead of you pickable as the goal. */
+.ladder { display: grid; }
+.rung {
+  display: grid; grid-template-columns: 16px 24px minmax(0, 1fr) 52px 40px 60px 36px;
+  align-items: center; gap: 8px; width: 100%; min-height: var(--row);
+  padding: 0 var(--inset); border: 0; background: transparent; text-align: left;
+  font-size: 13.5px; border-top: 1px solid var(--border);
 }
-.native-select select:hover:not(:disabled) { background: var(--accent); }
-.native-select select:disabled { opacity: 0.5; cursor: not-allowed; }
-.native-select select:focus-visible {
-  outline: none; border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+.rung .num { text-align: right; }
+.rung-head { min-height: 28px; border-top: 0; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
+.rung-pos { color: var(--muted-foreground); }
+.rung-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.rung-name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+button.rung { cursor: pointer; transition: background-color var(--fast) ease; }
+button.rung:hover { background: var(--row-hover); }
+button.rung:active { background: var(--accent); transition-duration: 0ms; }
+button.rung[aria-checked="true"] { background: var(--row-you); font-weight: 600; }
+button.rung:focus-visible { outline-offset: -2px; border-radius: 0; }
+.rung.is-me { background: var(--row-you); font-weight: 600; }
+/* The mark of the picked goal, drawn like a radio button. */
+.radio {
+  width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--muted-foreground);
+  display: grid; place-items: center;
 }
-.native-select option { background: var(--popover); color: var(--foreground); }
-.native-select .icon {
-  position: absolute; right: 10px; top: 50%; translate: 0 -50%;
-  color: var(--muted-foreground); opacity: 0.7; pointer-events: none;
+button.rung[aria-checked="true"] .radio { border-color: var(--foreground); }
+button.rung[aria-checked="true"] .radio::after {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--foreground);
 }
 
-/* A solve on the route to the goal: a rail and a step number. */
+.focus { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+.focus > .card-title { padding: 0 var(--inset); }
+.focus .table-scroll { margin-top: 0; }
+.likely { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
+
+/* The answer, large enough to read from across the desk. */
+.plan-head { padding: 20px var(--inset) 4px; display: grid; gap: 4px; flex: none; }
+.plan-kicker { font-size: 13px; color: var(--muted-foreground); }
+.plan-headline { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; overflow-wrap: anywhere; }
+.plan-sub { font-size: 14px; color: var(--muted-foreground); min-height: 20px; }
+.targets-card { container-type: inline-size; }
+.targets-card .table-scroll { flex: 1 1 0; min-height: 320px; }
+.table-roomy td { height: 44px; }
+
+/* A solve on the route to the goal: a rail, a step number, full weight. */
 tr.on-route td:first-child { box-shadow: inset 2px 0 0 var(--foreground); }
+tr.on-route .chal-name { font-weight: 600; }
 .step {
   display: inline-block; min-width: 2ch; margin-right: 8px;
   color: var(--muted-foreground); font-variant-numeric: tabular-nums;
 }
 .chal { display: flex; align-items: baseline; min-width: 0; }
 .why { color: var(--muted-foreground); }
-tr.is-goal { background: var(--row-hover); }
+
+/* -------------------------------------------------------- notifications */
+
+.toasts {
+  position: fixed; right: 16px; bottom: 16px; z-index: var(--layer-toast);
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  width: min(360px, calc(100vw - 32px)); pointer-events: none;
+}
+.toast {
+  pointer-events: auto; width: 100%;
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) 28px; gap: 12px; align-items: start;
+  padding: 12px 8px 12px 16px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--popover); color: var(--foreground); box-shadow: var(--shadow-lg);
+  animation: toast-in var(--normal) cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+.toast[data-leaving] { opacity: 0; transition: opacity var(--fast) ease; }
+.toast > .icon { margin-top: 2px; color: var(--muted-foreground); }
+.toast[data-tone="good"] > .icon { color: var(--success); }
+.toast[data-tone="bad"] > .icon { color: var(--destructive); }
+.toast-title { font-weight: 500; overflow-wrap: anywhere; }
+.toast-detail { font-size: 13px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.toast .btn { margin-top: -4px; color: var(--muted-foreground); }
+
+/* --------------------------------------------------------------- dialog */
+
+.dialog {
+  width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px);
+  background: var(--popover); color: var(--foreground); box-shadow: var(--shadow-lg);
+}
+.dialog[open] { animation: toast-in var(--normal) cubic-bezier(0.16, 1, 0.3, 1); }
+.dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 12px 8px var(--inset); }
+.keys { margin: 0; padding: 0 var(--inset) var(--inset); display: grid; }
+.keys > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 8px 0; border-top: 1px solid var(--border); }
+.keys dt { white-space: nowrap; }
+.keys dd { margin: 0; color: var(--muted-foreground); }
+kbd {
+  display: inline-block; min-width: 22px; padding: 0 6px; text-align: center;
+  border: 1px solid var(--input); border-radius: 6px; background: var(--muted);
+  font: 500 12px/20px var(--font-sans);
+}
 
 /* ------------------------------------------------- fit to one viewport */
 
@@ -658,11 +721,18 @@ tr.is-goal { background: var(--row-hover); }
 
   /* Board: standings at full height, the graph over the feed beside it. */
   #view-board {
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
     grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
-    grid-template-areas: "chart standings" "feed standings";
+    grid-template-areas: "standings chart" "standings feed";
     align-items: stretch;
   }
+  /* L steps through the layouts: split, the graph alone, the tables. */
+  #view-board[data-layout="graph"] { grid-template: "chart" minmax(0, 1fr) / minmax(0, 1fr); }
+  #view-board[data-layout="graph"] :is(.standings-card, .feed-card) { display: none; }
+  #view-board[data-layout="table"] {
+    grid-template: "standings feed" minmax(0, 1fr) / minmax(0, 1.4fr) minmax(0, 1fr);
+  }
+  #view-board[data-layout="table"] .chart-card { display: none; }
   .chart-card .card-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .chart-card .chart, .chart-radar { flex: 1; min-height: 0; height: auto; overflow: hidden; }
   .chart-card .legend { flex: none; max-height: 56px; overflow-y: auto; overscroll-behavior: contain; }
@@ -681,13 +751,11 @@ tr.is-goal { background: var(--row-hover); }
     .versus-table td, .versus-table th { height: 28px; }
   }
 
-  /* Plan: the summary keeps its height, the grid takes the rest. */
-  #plan-body { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
-  .plan-grid { min-height: 0; }
-  .plan-grid .catch-card .table-scroll { min-height: 0; }
-  .plan-side { min-height: 0; }
-  .ladder-card { flex: 0 1 auto; min-height: 148px; }
-  .focus-card { flex: 1 1 0; min-height: 116px; }
+  /* Plan: the rail and the answer at full height. */
+  #plan-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
+  .targets-card .table-scroll { min-height: 0; }
+  .ladder { flex: none; }
+  .focus { flex: 1; }
 }
 
 /* ----------------------------------------------------------- responsive */
@@ -704,6 +772,15 @@ tr.is-goal { background: var(--row-hover); }
 @container (max-width: 380px) {
   .col-cat { display: none; }
 }
+/* A narrow rail gives the last-hour column to the team names. */
+@container (max-width: 450px) {
+  .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px 36px; }
+  .rung > :nth-child(5) { display: none; }
+}
+@container (max-width: 600px) {
+  .col-why { display: none; }
+  .plan-headline { font-size: 22px; }
+}
 /* A wide feed reads as one line per solve. */
 @container (min-width: 560px) {
   .feed-main { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; }
@@ -715,8 +792,9 @@ tr.is-goal { background: var(--row-hover); }
   .standings-card, .feed-card { max-height: none; }
   .standings-card .table-scroll, .feed-card .table-scroll { max-height: 560px; }
   #analysis-body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "versus" "catch" "field" "edge"; }
-  .plan-grid { grid-template-columns: minmax(0, 1fr); }
-  .plan-grid .catch-card .table-scroll { flex: none; height: auto; min-height: 0; max-height: 520px; }
+  #plan-body { grid-template-columns: minmax(0, 1fr); }
+  .targets-card { order: -1; }
+  .targets-card .table-scroll { flex: none; min-height: 0; max-height: 520px; }
 }
 @media (max-width: 760px) {
   :root { --gutter: 16px; --inset: 16px; }
@@ -733,8 +811,8 @@ tr.is-goal { background: var(--row-hover); }
   .card-header.row > .row .input-wrap { flex: 1; }
   .combo { flex: 1; min-width: 180px; }
   .select { width: 100%; }
-  .native-select { flex: 1; }
-  .native-select select { width: 100%; max-width: none; }
+  .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px; }
+  .rung > :nth-child(5), .rung > :nth-child(7) { display: none; }
   /* The rival picker on the Analysis tab covers this on narrow screens. */
   .btn-compare { display: none; }
 }
@@ -745,4 +823,5 @@ tr.is-goal { background: var(--row-hover); }
 @media (forced-colors: active) {
   .swatch, .pop-bar > i { forced-color-adjust: none; }
   tr.on-route td:first-child { box-shadow: none; border-left: 2px solid CanvasText; }
+  button.rung[aria-checked="true"] .radio::after { background: CanvasText; }
 }

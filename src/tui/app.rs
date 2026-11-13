@@ -24,11 +24,46 @@ pub enum BoardLayout {
     Table,
 }
 
+/// How much of the score graph is drawn, counted back from now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Range {
+    All,
+    Last(i64, &'static str),
+}
+
+/// The ranges `t` steps through, as on the web page.
+pub const RANGES: [Range; 7] = [
+    Range::All,
+    Range::Last(86_400, "24h"),
+    Range::Last(43_200, "12h"),
+    Range::Last(21_600, "6h"),
+    Range::Last(10_800, "3h"),
+    Range::Last(3_600, "1h"),
+    Range::Last(1_800, "30m"),
+];
+
+impl Range {
+    pub fn secs(self) -> Option<i64> {
+        match self {
+            Range::All => None,
+            Range::Last(secs, _) => Some(secs),
+        }
+    }
+
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Range::All => None,
+            Range::Last(_, label) => Some(label),
+        }
+    }
+}
+
 pub struct App {
     pub board: BoardModel,
 
     pub view: View,
     pub layout: BoardLayout,
+    pub range: Range,
     pub show_help: bool,
     pub selected: usize,
     pub board_state: TableState,
@@ -47,6 +82,7 @@ impl App {
             board,
             view: View::Board,
             layout: BoardLayout::Split,
+            range: Range::All,
             show_help: false,
             board_state: TableState::default(),
             catch_state: TableState::default().with_selected(Some(0)),
@@ -248,6 +284,10 @@ impl App {
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => self.toggle_pin(),
+            KeyCode::Char('t') => {
+                let i = RANGES.iter().position(|r| *r == self.range).unwrap_or(0);
+                self.range = RANGES[(i + 1) % RANGES.len()];
+            }
             KeyCode::Char('l') => {
                 self.layout = match self.layout {
                     BoardLayout::Split => BoardLayout::Graph,
@@ -277,6 +317,18 @@ impl App {
     }
 
     fn plan_key(&mut self, code: KeyCode) {
+        let goal = self.board.plan.goal;
+        match code {
+            KeyCode::Left | KeyCode::Char('h') => self.board.step_goal(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.board.step_goal(1),
+            KeyCode::Char('m') => self.board.reset_goal(),
+            _ => {}
+        }
+        if self.board.plan.goal != goal {
+            // A new goal means a new route: back to its first step.
+            self.plan_state.select(Some(0));
+            return;
+        }
         let delta = match code {
             KeyCode::Up | KeyCode::Char('k') => -1,
             KeyCode::Down | KeyCode::Char('j') => 1,

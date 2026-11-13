@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::canvas::{Canvas, Context, Line as CanvasLine};
 use ratatui::widgets::{
     Axis, Block, Cell, Chart, Clear, Dataset, GraphType, HighlightSpacing, LegendPosition,
-    Paragraph, Row, Table, Wrap,
+    Paragraph, Row, Table, TableState, Wrap,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -55,6 +55,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         View::Plan => render_plan(f, body, app),
     }
     render_footer(f, footer, app);
+    render_notices(f, body, app);
     if app.show_help {
         render_help(f, area);
     }
@@ -237,6 +238,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("m", "you"),
                 ("/", "find"),
                 ("Enter", "graph team"),
+                ("t", "range"),
                 ("l", "layout"),
                 ("Tab", "analysis"),
                 ("?", "keys"),
@@ -251,7 +253,9 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("q", "quit"),
             ],
             View::Plan => &[
+                ("<-/->", "goal"),
                 ("↑/↓", "targets"),
+                ("m", "default goal"),
                 ("Tab", "board"),
                 ("?", "keys"),
                 ("q", "quit"),
@@ -268,17 +272,20 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     const KEY_W: usize = 15;
-    let rows: [(&str, &str); 17] = [
+    let rows: [(&str, &str); 20] = [
         ("Tab, 1, 2, 3", "Switch Board / Analysis / Plan"),
-        ("↑/↓, j/k", "Move selection or catch-up list"),
+        ("↑/↓, j/k", "Move selection or target list"),
         ("PgUp/PgDn", "Move ten rows"),
         ("Home/End, g/G", "First / last team"),
         ("m", "Jump to you (Board)"),
         ("", "Rival = team above you (Analysis)"),
+        ("", "Goal = the default one (Plan)"),
         ("/", "Find a team (n: next match)"),
         ("Enter", "Add or remove team on the graph"),
+        ("t", "Graph range: all, 24h ... 30m"),
         ("l", "Board layout: split, graph, table"),
-        ("<-/->, h/l", "Rival one place up / down"),
+        ("<-/->, h/l", "Rival one place up / down (Analysis)"),
+        ("", "Goal one place up / down (Plan)"),
         ("a", "Analyse the selected team"),
         ("r", "Update now"),
         ("q, Ctrl-C", "Quit"),
@@ -501,7 +508,7 @@ fn render_standings(f: &mut Frame, area: Rect, app: &mut App) {
 /// Draw the score graph.  The standings swatches act as the legend, so a
 /// separate legend is only drawn when the graph is shown alone.
 fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
-    let inner = titled(f, area, "Score over time");
+    let inner = titled(f, area, &graph_title(app));
 
     if app.board.lines.iter().all(|l| l.points.len() <= 2) {
         note(
@@ -512,28 +519,46 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
         return;
     }
 
-    let x0 = app
+    let first = app
         .board
         .lines
         .iter()
         .filter_map(|l| l.points.first().map(|p| p.0))
         .fold(f64::MAX, f64::min);
+    // With a range picked, start that long ago and from the lowest score
+    // then, so the recent climb fills the graph.
+    let x0 = match app.range.secs() {
+        Some(secs) => first.max((app.board.now - secs) as f64),
+        None => first,
+    };
     let x1 = (app.board.now as f64).max(x0 + 60.0);
-    let y1 = app
+    let windowed: Vec<Vec<(f64, f64)>> = app
         .board
         .lines
         .iter()
-        .flat_map(|l| l.points.iter().map(|p| p.1))
+        .map(|l| window(&l.points, x0))
+        .collect();
+    let y1 = windowed
+        .iter()
+        .flat_map(|l| l.iter().map(|p| p.1))
         .fold(0.0, f64::max)
         .max(1.0)
         * 1.08;
+    let y0 = match app.range.secs() {
+        Some(_) => windowed
+            .iter()
+            .filter_map(|l| l.first().map(|p| p.1))
+            .fold(y1, f64::min),
+        None => 0.0,
+    };
 
     let names_w = (inner.width / 4).clamp(10, 22) as usize;
     let datasets: Vec<Dataset> = app
         .board
         .lines
         .iter()
-        .map(|l| {
+        .zip(&windowed)
+        .map(|(l, points)| {
             let name = if l.is_me {
                 format!("{} (you)", fit(&l.name, names_w.saturating_sub(6)))
             } else {
@@ -549,7 +574,7 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
                 .marker(Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(style)
-                .data(&l.points)
+                .data(points)
         })
         .collect();
 
@@ -559,7 +584,7 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
         .iter()
         .map(|t| Line::styled(local_time(*t as i64, with_date), theme::muted()))
         .collect();
-    let y_labels: Vec<Line> = [0.0, y1 / 2.0, y1]
+    let y_labels: Vec<Line> = [y0, (y0 + y1) / 2.0, y1]
         .iter()
         .map(|v| Line::styled(pts(*v as i64), theme::muted()))
         .collect();
@@ -573,13 +598,32 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
         )
         .y_axis(
             Axis::default()
-                .bounds([0.0, y1])
+                .bounds([y0, y1])
                 .labels(y_labels)
                 .style(theme::muted()),
         )
         .legend_position(legend.then_some(LegendPosition::TopLeft))
         .hidden_legend_constraints((Constraint::Ratio(1, 2), Constraint::Ratio(3, 4)));
     f.render_widget(chart, inner);
+}
+
+fn graph_title(app: &App) -> String {
+    match app.range.label() {
+        Some(label) => format!("Score over time, last {label}"),
+        None => "Score over time".into(),
+    }
+}
+
+/// The part of a step line from `start` on, beginning at the score held
+/// then.
+fn window(points: &[(f64, f64)], start: f64) -> Vec<(f64, f64)> {
+    let cut = points.partition_point(|p| p.0 < start);
+    let mut out = Vec::with_capacity(points.len() - cut + 1);
+    if cut > 0 {
+        out.push((start, points[cut - 1].1));
+    }
+    out.extend_from_slice(&points[cut..]);
+    out
 }
 
 fn render_feed(f: &mut Frame, area: Rect, app: &App) {
@@ -681,7 +725,7 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
     let side_stack = |f: &mut Frame, side: Rect, app: &mut App| {
         let cats_h = RADAR_HEIGHT.max(app.board.h2h.comparison.categories.len() as u16 + 3);
         let [h2h, _, cats, _, edge] = Layout::vertical([
-            Constraint::Length(8),
+            Constraint::Length(9),
             Constraint::Length(1),
             Constraint::Length(cats_h),
             Constraint::Length(1),
@@ -695,10 +739,10 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
 
     if area.width >= 2 * left_w + SIDE_WIDTH + 2 * PANEL_GAP {
         // Very wide: three columns, each full height.
-        let [catch, field, side] = Layout::horizontal([
-            Constraint::Length(left_w),
-            Constraint::Length(left_w),
+        let [side, catch, field] = Layout::horizontal([
             Constraint::Length(SIDE_WIDTH),
+            Constraint::Length(left_w),
+            Constraint::Length(left_w),
         ])
         .flex(ratatui::layout::Flex::SpaceBetween)
         .spacing(PANEL_GAP)
@@ -707,9 +751,9 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
         render_field(f, field, app, name_w);
         side_stack(f, side, app);
     } else if area.width >= left_w + SIDE_WIDTH + PANEL_GAP {
-        // Wide: catch-up over open challenges, side column on the right.
-        let [main, side] =
-            Layout::horizontal([Constraint::Length(left_w), Constraint::Length(SIDE_WIDTH)])
+        // Wide: the comparison rail, then catch-up over open challenges.
+        let [side, main] =
+            Layout::horizontal([Constraint::Length(SIDE_WIDTH), Constraint::Length(left_w)])
                 .flex(ratatui::layout::Flex::SpaceBetween)
                 .spacing(PANEL_GAP)
                 .areas(rest);
@@ -802,14 +846,14 @@ fn render_verdict(f: &mut Frame, area: Rect, app: &App) {
             match c.gap_closing_index(gap) {
                 Some(i) => vec![
                     Span::styled("To pass: ", theme::muted()),
-                    Span::styled(format!("top {} in Catch up", i + 1), theme::heading()),
+                    Span::styled(format!("top {} catch-up targets", i + 1), theme::heading()),
                     Span::styled(
                         format!("  +{}", pts(c.catch_up[..=i].iter().map(|t| t.value).sum())),
                         theme::positive(),
                     ),
                 ],
                 None => vec![
-                    Span::styled("Catch up is worth ", theme::muted()),
+                    Span::styled("Catch-up targets are worth ", theme::muted()),
                     Span::styled(format!("+{}", pts(c.catch_up_points())), theme::positive()),
                     Span::styled(", not enough on its own", theme::muted()),
                 ],
@@ -843,6 +887,16 @@ fn render_head_to_head(f: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_else(|| "Rival".into());
 
     let mut rows = vec![
+        Row::new(vec![
+            Cell::from("Rank"),
+            Cell::from(right(format!("#{}", me.pos))),
+            Cell::from(right(
+                h.rival
+                    .as_ref()
+                    .map(|r| format!("#{}", r.pos))
+                    .unwrap_or_default(),
+            )),
+        ]),
         Row::new(vec![
             Cell::from("Score"),
             Cell::from(right(pts(me.score)).style(theme::you())),
@@ -878,7 +932,7 @@ fn render_head_to_head(f: &mut Frame, area: Rect, app: &App) {
         ]),
     ];
     if h.rival.is_none() {
-        rows.truncate(2);
+        rows.truncate(3);
     }
     let header = header_row(
         vec![
@@ -903,7 +957,7 @@ fn render_head_to_head(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_catch_up(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
     let h = &app.board.h2h;
-    let inner = titled(f, area, "Catch up");
+    let inner = titled(f, area, "Catch-up targets");
 
     let Some(ref rival) = h.rival else {
         note(f, inner, "Pick a rival: <-/->");
@@ -1212,7 +1266,7 @@ fn render_field(f: &mut Frame, area: Rect, app: &App, name_w: u16) {
         f,
         area,
         if app.board.h2h.rival.is_some() {
-            "Open for both"
+            "Unsolved by both"
         } else {
             "Open for you"
         },
@@ -1314,8 +1368,8 @@ fn render_edge(f: &mut Frame, area: Rect, app: &App) {
 // Plan
 // ----------------------------------------------------------------------
 
-/// Best targets against the whole board, the teams to pass on the way to
-/// the top, and the categories with the most likely points.
+/// The goal and how to reach it, the ladder to pick the goal from, and
+/// every open challenge ranked by likely points.
 fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
     let [verdict, _, rest] = Layout::vertical([
         Constraint::Length(2),
@@ -1335,12 +1389,13 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
             .iter()
             .map(|t| fit(&t.stat.name, 64).chars().count()),
     );
-    // Pts, Solved, Category, Challenge (room for the "passes" lines).
-    let main_w = 6 + 6 + 11 + name_w.max(34) + 2 * 4 + 2;
+    // Step, Pts, Odds, Category, Challenge, Why.
+    let main_w = 2 + 6 + 5 + 11 + name_w.max(30) + WHY_WIDTH + 2 * 5 + 2;
     let ladder_h = app.board.plan.ladder.len() as u16 + 4;
-    if area.width >= main_w + SIDE_WIDTH + PANEL_GAP {
-        let [main, side] =
-            Layout::horizontal([Constraint::Length(main_w), Constraint::Length(SIDE_WIDTH)])
+    if area.width >= main_w + PLAN_SIDE + PANEL_GAP {
+        // The rail first, as on the Analysis tab: pick, then act.
+        let [side, main] =
+            Layout::horizontal([Constraint::Length(PLAN_SIDE), Constraint::Length(main_w)])
                 .flex(ratatui::layout::Flex::SpaceBetween)
                 .spacing(PANEL_GAP)
                 .areas(rest);
@@ -1350,9 +1405,9 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
             Constraint::Min(0),
         ])
         .areas(side);
-        render_targets(f, main, app, name_w);
         render_ladder(f, ladder, app);
         render_focus(f, focus, app);
+        render_targets(f, main, app, name_w);
     } else {
         let [ladder, _, targets] = Layout::vertical([
             Constraint::Length(ladder_h.min(rest.height / 2)),
@@ -1365,7 +1420,25 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-/// "How far from the top, and what gets you there."
+/// Width of the Plan rail: the ladder with its marker.
+const PLAN_SIDE: u16 = 58;
+/// Width of the "Why" column.
+const WHY_WIDTH: u16 = 19;
+
+/// Chance as a whole percentage; anything under half a percent is "<1%".
+fn percent(odds: f64) -> String {
+    if odds > 0.0 && odds < 0.005 {
+        "<1%".into()
+    } else {
+        format!("{:.0}%", odds * 100.0)
+    }
+}
+
+fn solves(n: usize) -> String {
+    format!("{n} {}", if n == 1 { "solve" } else { "solves" })
+}
+
+/// "Where you are, what you aim for, and what it takes."
 fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
     let Some(ref me) = app.board.h2h.me else {
         note(
@@ -1379,40 +1452,55 @@ fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let plan = &app.board.plan;
+    let goal = plan.goal_rung();
+    let qualifying = |pos: i64| app.board.cutoff.is_some_and(|n| i64::from(n) == pos);
     let mut first = vec![
         Span::styled(format!("#{} {}", me.pos, fit(&me.name, 30)), theme::you()),
         Span::raw(format!("  {} pts", pts(me.score))),
     ];
-    let leader = plan.ladder.iter().find(|r| r.pos == 1 && r.ahead >= 0);
-    if let Some(l) = leader {
+    if let Some(g) = goal {
         first.push(Span::styled("   |   ", theme::muted()));
         first.push(Span::styled(
-            format!("{} behind", pts(l.ahead)),
+            format!("{} behind", pts(g.ahead)),
             theme::negative().add_modifier(Modifier::BOLD),
         ));
         first.push(Span::styled(
-            format!(" #1 {}", fit(&l.name, 28)),
+            format!(" #{} {}", g.pos, fit(&g.name, 28)),
             theme::heading(),
         ));
     }
 
-    let open: i64 = plan.targets.iter().map(|t| t.stat.value).sum();
-    let second = match (leader, plan.targets.last()) {
-        (None, _) => vec![Span::styled("You lead.", theme::positive())],
-        (_, None) => vec![Span::styled("Nothing left to solve.", theme::muted())],
-        (Some(l), Some(last)) => match l.to_pass {
-            Some((n, gain)) => vec![
-                Span::styled("To take #1: ", theme::muted()),
-                Span::styled(format!("top {n} targets"), theme::heading()),
-                Span::styled(format!("  +{}", pts(gain)), theme::positive()),
-            ],
-            None => vec![
-                Span::styled("Everything open (", theme::muted()),
-                Span::styled(format!("+{}", pts(open)), theme::positive()),
-                Span::styled(") reaches ", theme::muted()),
-                Span::styled(format!("#{}", last.reach), theme::heading()),
-            ],
-        },
+    let second = match goal {
+        None if plan.targets.is_empty() => {
+            vec![Span::styled("Nothing left to solve.", theme::muted())]
+        }
+        None => vec![Span::styled("You lead the board.", theme::positive())],
+        Some(g) => {
+            let aim = if qualifying(g.pos) {
+                format!("To reach top {}: ", g.pos)
+            } else {
+                format!("To pass #{}: ", g.pos)
+            };
+            match (g.to_pass, g.route_odds) {
+                (Some((n, gain)), Some(odds)) => vec![
+                    Span::styled(aim, theme::muted()),
+                    Span::styled(solves(n), theme::heading()),
+                    Span::styled(format!("  +{}", pts(gain)), theme::positive()),
+                    Span::styled(
+                        format!(
+                            "   {} chance of landing {}",
+                            percent(odds),
+                            if n == 1 { "it" } else { "all" }
+                        ),
+                        theme::muted(),
+                    ),
+                ],
+                _ => vec![
+                    Span::styled(aim, theme::muted()),
+                    Span::styled("not enough open points", theme::attention()),
+                ],
+            }
+        }
     };
     f.render_widget(
         Paragraph::new(vec![Line::from(first), Line::from(second)]).centered(),
@@ -1435,19 +1523,21 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
         );
         return;
     }
-    // Most likely points first; a line after each solve that overtakes
-    // someone.
+    // The route to the goal first, in the order to try it, closed by a
+    // line; then everything else, most likely points first.
+    let route = plan.route();
+    let rest = plan.off_route();
     let selected = app.plan_state.selected().unwrap_or(0);
     let mut selected_row = 0;
     let mut rows: Vec<Row> = Vec::new();
-    for (i, t) in plan.targets.iter().enumerate() {
-        if i == selected {
-            selected_row = rows.len();
-        }
-        rows.push(Row::new(vec![
+    let target_row = |t: &crate::board::analysis::Target, step: Option<usize>| {
+        Row::new(vec![
+            Cell::from(
+                right(step.map(|n| n.to_string()).unwrap_or_default()).style(theme::muted()),
+            ),
             Cell::from(right(pts(t.stat.value)).style(theme::points())),
             Cell::from(
-                right(format!("{:.0}%", t.odds * 100.0))
+                right(percent(t.odds))
                     .style(theme::popularity((t.odds * 10.0).round() as usize, 10)),
             ),
             Cell::from(Span::styled(
@@ -1455,31 +1545,48 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
                 theme::category(&t.stat.category),
             )),
             Cell::from(fit(&t.stat.name, name_w as usize)),
-        ]));
-        if let Some((rank, ref name)) = t.passes {
-            rows.push(rule_row(
-                format!("↑ passes {} for #{rank}", fit(name, 24)),
-                4,
-                3,
-            ));
+            Cell::from(Span::styled(
+                fit(&t.why().unwrap_or_default(), WHY_WIDTH as usize),
+                theme::muted(),
+            )),
+        ])
+    };
+    for (i, t) in route.iter().chain(rest.iter()).enumerate() {
+        if i == selected {
+            selected_row = rows.len();
+        }
+        rows.push(target_row(t, (i < route.len()).then_some(i + 1)));
+        if i + 1 == route.len()
+            && let Some(g) = plan.goal_rung()
+        {
+            let label = if app.board.cutoff.is_some_and(|n| i64::from(n) == g.pos) {
+                format!("↑ top {}, past {}", g.pos, fit(&g.name, 18))
+            } else {
+                format!("↑ passes #{} {}", g.pos, fit(&g.name, 18))
+            };
+            rows.push(rule_row(label, 6, 4));
         }
     }
     let header = header_row(
         vec![
+            Cell::from(""),
             Cell::from(right("Pts")),
             Cell::from(right("Odds")),
             Cell::from("Category"),
             Cell::from("Challenge"),
+            Cell::from("Why"),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
     let table = Table::new(
         rows,
         [
+            Constraint::Length(2),
             Constraint::Length(6),
-            Constraint::Length(6),
+            Constraint::Length(5),
             Constraint::Length(11),
-            Constraint::Length(name_w.max(34)),
+            Constraint::Length(name_w.max(30)),
+            Constraint::Length(WHY_WIDTH),
         ],
     )
     .header(header)
@@ -1493,48 +1600,62 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
     *app.plan_state.offset_mut() = state.offset();
 }
 
+/// The teams to pass, with the one the route aims at marked.
 fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
-    let inner = titled(f, area, "Path to the top");
+    let inner = titled(f, area, "Aim for");
     let Some(ref me) = app.board.h2h.me else {
         return;
     };
-    let ladder = &app.board.plan.ladder;
-    let rung = |pos: i64, name: &str, gap: Cell<'static>, hour: Cell<'static>, pass| {
+    let plan = &app.board.plan;
+    let rung = |pos: i64, name: &str, cells: [Cell<'static>; 4]| {
+        let [gap, hour, pass, odds] = cells;
         Row::new(vec![
             Cell::from(right(format!("#{pos}"))),
-            Cell::from(fit(name, 18)),
+            Cell::from(fit(name, 16)),
             gap,
             hour,
             pass,
+            odds,
         ])
     };
+    let blank = || [(); 4].map(|_| Cell::from(""));
     let mut rows: Vec<Row> = Vec::new();
+    let mut goal_row = None;
     let mut me_shown = false;
-    for r in ladder {
+    for r in &plan.ladder {
         if !me_shown && r.pos > me.pos {
-            rows.push(you_rung(me, &rung));
+            rows.push(rung(me.pos, &me.name, blank()).style(theme::you()));
             me_shown = true;
+        }
+        if Some(r.pos) == plan.goal {
+            goal_row = Some(rows.len());
         }
         let gap = -r.ahead;
         let hour = r
             .momentum
             .map(|m| Cell::from(right(signed_pts(m.last_hour)).style(theme::signed(m.last_hour))))
             .unwrap_or_else(|| Cell::from(right("")));
-        let pass = match r.to_pass {
-            Some((n, _)) => Cell::from(right(n.to_string())),
-            None if r.ahead < 0 => Cell::from(""),
-            None => Cell::from(right("-").style(theme::muted())),
+        let (pass, odds) = match (r.to_pass, r.route_odds) {
+            (Some((n, _)), Some(odds)) => (
+                Cell::from(right(solves(n))),
+                Cell::from(right(percent(odds)).style(theme::muted())),
+            ),
+            _ if r.ahead < 0 => (Cell::from(""), Cell::from("")),
+            _ => (Cell::from(right("-").style(theme::muted())), Cell::from("")),
         };
         rows.push(rung(
             r.pos,
             &r.name,
-            Cell::from(right(signed_pts(gap)).style(theme::signed(gap))),
-            hour,
-            pass,
+            [
+                Cell::from(right(signed_pts(gap)).style(theme::signed(gap))),
+                hour,
+                pass,
+                odds,
+            ],
         ));
     }
     if !me_shown {
-        rows.push(you_rung(me, &rung));
+        rows.push(rung(me.pos, &me.name, blank()).style(theme::you()));
     }
     let header = header_row(
         vec![
@@ -1546,6 +1667,7 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
             Cell::from(right("Gap")),
             Cell::from(right("1 h")),
             Cell::from(right("To pass")),
+            Cell::from(right("Odds")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -1553,29 +1675,20 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Length(4),
-            Constraint::Length(18),
+            Constraint::Length(16),
             Constraint::Length(7),
             Constraint::Length(6),
-            Constraint::Length(7),
+            Constraint::Length(8),
+            Constraint::Length(5),
         ],
     )
     .header(header)
-    .column_spacing(2);
-    f.render_widget(table, inner);
-}
-
-fn you_rung(
-    me: &crate::board::model::Party,
-    rung: &dyn Fn(i64, &str, Cell<'static>, Cell<'static>, Cell<'static>) -> Row<'static>,
-) -> Row<'static> {
-    rung(
-        me.pos,
-        &me.name,
-        Cell::from(""),
-        Cell::from(""),
-        Cell::from(""),
-    )
-    .style(theme::you())
+    .column_spacing(2)
+    .row_highlight_style(theme::selected())
+    .highlight_symbol(Line::styled("▶", theme::accent()))
+    .highlight_spacing(HighlightSpacing::Always);
+    let mut state = TableState::default().with_selected(goal_row);
+    f.render_stateful_widget(table, inner, &mut state);
 }
 
 fn render_focus(f: &mut Frame, area: Rect, app: &App) {
@@ -1594,16 +1707,20 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
                     fit(&c.category, 14),
                     theme::category(&c.category),
                 )),
+                Cell::from(right(format!("{}/{}", c.mine, c.total)).style(theme::muted())),
                 Cell::from(right(c.open.to_string())),
                 Cell::from(right(pts(c.points)).style(theme::points())),
+                Cell::from(right(pts(c.expected.round() as i64))),
             ])
         })
         .collect();
     let header = header_row(
         vec![
             Cell::from("Category"),
+            Cell::from(right("Solved")),
             Cell::from(right("Open")),
             Cell::from(right("Pts")),
+            Cell::from(right("Likely")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -1611,11 +1728,71 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Min(10),
+            Constraint::Length(6),
             Constraint::Length(5),
             Constraint::Length(7),
+            Constraint::Length(6),
         ],
     )
     .header(header)
     .column_spacing(2);
+    // Line up with the ladder above, past its marker column.
+    let inner = Rect {
+        x: inner.x + 2,
+        width: inner.width.saturating_sub(2),
+        ..inner
+    };
     f.render_widget(table, inner);
+}
+
+// ----------------------------------------------------------------------
+// Notices
+// ----------------------------------------------------------------------
+
+/// Notices shown at once.
+const NOTICE_ROWS: usize = 3;
+const NOTICE_WIDTH: u16 = 46;
+
+/// What just happened, stacked in the bottom right corner, newest last.
+fn render_notices(f: &mut Frame, area: Rect, app: &App) {
+    use crate::board::model::NoticeKind;
+    let mut live: Vec<_> = app.board.live_notices().collect();
+    let skip = live.len().saturating_sub(NOTICE_ROWS);
+    live.drain(..skip);
+    if live.is_empty() || area.width < NOTICE_WIDTH + 2 {
+        return;
+    }
+    let text_w = NOTICE_WIDTH as usize - 4;
+    let mut lines: Vec<Line> = Vec::new();
+    for n in &live {
+        let (mark, style) = match n.kind {
+            NoticeKind::YourSolve | NoticeKind::RankUp | NoticeKind::Recovered => {
+                ("+", theme::positive())
+            }
+            NoticeKind::RankDown | NoticeKind::Failed => ("!", theme::negative()),
+            NoticeKind::Solve => ("·", theme::muted()),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{mark} "), style),
+            Span::styled(fit(&n.title, text_w), theme::heading()),
+        ]));
+        if !n.detail.is_empty() {
+            lines.push(Line::styled(
+                format!("  {}", fit(&n.detail, text_w)),
+                theme::muted(),
+            ));
+        }
+    }
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect {
+        x: area.x + area.width - NOTICE_WIDTH - 1,
+        y: area.y + area.height - height,
+        width: NOTICE_WIDTH,
+        height,
+    };
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Paragraph::new(lines).block(Block::bordered().border_style(theme::muted())),
+        rect,
+    );
 }

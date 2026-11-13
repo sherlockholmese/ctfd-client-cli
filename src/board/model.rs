@@ -181,6 +181,57 @@ pub struct Rung {
     pub route_odds: Option<f64>,
 }
 
+/// What a notice is about; the views pick its tone from this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeKind {
+    /// You solved a challenge.
+    YourSolve,
+    /// Another account solved one (or several did).
+    Solve,
+    /// You moved up the board.
+    RankUp,
+    /// You moved down the board.
+    RankDown,
+    /// An update failed.
+    Failed,
+    /// Updates work again.
+    Recovered,
+}
+
+impl NoticeKind {
+    /// Stable key for the web page.
+    pub fn key(self) -> &'static str {
+        match self {
+            NoticeKind::YourSolve => "your_solve",
+            NoticeKind::Solve => "solve",
+            NoticeKind::RankUp => "rank_up",
+            NoticeKind::RankDown => "rank_down",
+            NoticeKind::Failed => "failed",
+            NoticeKind::Recovered => "recovered",
+        }
+    }
+}
+
+/// Something that just happened, shown briefly in a corner of the view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Notice {
+    /// Increases with every notice of this run.
+    pub id: u64,
+    pub kind: NoticeKind,
+    pub title: String,
+    pub detail: String,
+    pub at: Instant,
+}
+
+/// How long a notice stays on screen.
+pub const NOTICE_TTL: Duration = Duration::from_secs(8);
+/// Notices kept for views that connect late or redraw.
+const NOTICE_KEEP: usize = 12;
+/// Solves named one by one in a single update; more are summed up.
+const NOTICE_SOLVES: usize = 3;
+/// A solve older than this (seconds) is history, not news.
+const NEWS_SECS: i64 = 300;
+
 /// Where to spend time to climb: ranked against the whole board.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
@@ -188,9 +239,40 @@ pub struct Plan {
     pub ladder: Vec<Rung>,
     pub targets: Vec<analysis::Target>,
     pub focus: Vec<analysis::Focus>,
-    /// Rank of the team to aim for first: the last qualifying place when
-    /// you are outside it, else the team above you.
+    /// Rank of the team the route aims to pass: the one picked with
+    /// [`BoardModel::set_goal`] while it is still ahead of you, else the
+    /// last qualifying place when you are outside it, else the team above
+    /// you.
     pub goal: Option<i64>,
+}
+
+impl Plan {
+    /// The rung the route aims to pass.
+    pub fn goal_rung(&self) -> Option<&Rung> {
+        let pos = self.goal?;
+        self.ladder.iter().find(|r| r.pos == pos)
+    }
+
+    /// Targets on the route to the goal, in the order to try them.
+    pub fn route(&self) -> Vec<&analysis::Target> {
+        self.goal_rung()
+            .map(|r| {
+                r.route
+                    .iter()
+                    .filter_map(|id| self.targets.iter().find(|t| t.stat.id == *id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Targets off the route, most likely points first.
+    pub fn off_route(&self) -> Vec<&analysis::Target> {
+        let on: &[u64] = self.goal_rung().map(|r| r.route.as_slice()).unwrap_or(&[]);
+        self.targets
+            .iter()
+            .filter(|t| !on.contains(&t.stat.id))
+            .collect()
+    }
 }
 
 /// How far back a solve counts as recent, in seconds.
@@ -226,7 +308,12 @@ pub struct BoardModel {
     pub data: Data,
 
     pub rival_key: Option<String>,
+    /// Account picked as the Plan goal; `None` follows the default.
+    pub goal_key: Option<String>,
     pub pins: Vec<u64>,
+    /// Recent notices, oldest first.
+    pub notices: std::collections::VecDeque<Notice>,
+    next_notice: u64,
 
     pub last_update: Instant,
     pub updated_at: chrono::DateTime<chrono::Local>,
@@ -272,7 +359,10 @@ impl BoardModel {
             me_name,
             data,
             rival_key: None,
+            goal_key: None,
             pins: Vec::new(),
+            notices: Default::default(),
+            next_notice: 1,
             last_update: Instant::now(),
             updated_at: chrono::Local::now(),
             refreshing: false,
@@ -430,6 +520,13 @@ impl BoardModel {
             Update::Refreshing => self.refreshing = true,
             Update::Failed(msg) => {
                 self.refreshing = false;
+                if self.error.is_none() {
+                    self.notify(
+                        NoticeKind::Failed,
+                        "Couldn't update the scoreboard".into(),
+                        msg.clone(),
+                    );
+                }
                 self.error = Some(msg);
                 self.last_update = Instant::now();
             }
@@ -438,6 +535,8 @@ impl BoardModel {
                 self.rebuild(true);
             }
             Update::Data(new) => {
+                let was = self.me_index().map(|i| self.data.standings[i].pos);
+                let failed = self.error.is_some();
                 self.track_changes(&new.standings);
                 let mut new = *new;
                 for (id, solves) in std::mem::take(&mut self.data.accounts) {
@@ -450,7 +549,89 @@ impl BoardModel {
                 self.last_update = Instant::now();
                 self.updated_at = chrono::Local::now();
                 self.rebuild(true);
+                if failed {
+                    self.notify(
+                        NoticeKind::Recovered,
+                        "Scoreboard is updating again".into(),
+                        String::new(),
+                    );
+                }
+                self.notify_rank(was);
             }
+        }
+    }
+
+    /// Add a notice for the views to show.
+    fn notify(&mut self, kind: NoticeKind, title: String, detail: String) {
+        self.notices.push_back(Notice {
+            id: self.next_notice,
+            kind,
+            title,
+            detail,
+            at: Instant::now(),
+        });
+        self.next_notice += 1;
+        while self.notices.len() > NOTICE_KEEP {
+            self.notices.pop_front();
+        }
+    }
+
+    /// Notices still fresh enough to show, oldest first.
+    pub fn live_notices(&self) -> impl Iterator<Item = &Notice> {
+        self.notices.iter().filter(|n| n.at.elapsed() < NOTICE_TTL)
+    }
+
+    /// Say so when your rank moved from `was`, naming who is next to you.
+    fn notify_rank(&mut self, was: Option<i64>) {
+        let Some(i) = self.me_index() else { return };
+        let now = self.data.standings[i].pos;
+        let Some(was) = was.filter(|&w| w != now) else {
+            return;
+        };
+        let neighbour = |j: Option<usize>| {
+            j.and_then(|j| self.data.standings.get(j))
+                .map(|e| e.name.clone())
+        };
+        if now < was {
+            let detail = neighbour(i.checked_add(1))
+                .map(|n| format!("Passed {n}"))
+                .unwrap_or_default();
+            self.notify(NoticeKind::RankUp, format!("You're up to #{now}"), detail);
+        } else {
+            let detail = neighbour(i.checked_sub(1))
+                .map(|n| format!("Passed by {n}"))
+                .unwrap_or_default();
+            self.notify(
+                NoticeKind::RankDown,
+                format!("You're down to #{now}"),
+                detail,
+            );
+        }
+    }
+
+    /// Aim the Plan route at the account with this key.
+    pub fn set_goal(&mut self, key: String) {
+        self.goal_key = Some(key);
+        self.rebuild_h2h();
+    }
+
+    /// Go back to the default goal.
+    pub fn reset_goal(&mut self) {
+        self.goal_key = None;
+        self.rebuild_h2h();
+    }
+
+    /// Move the goal one team up the board (`-1`) or down (`1`), among
+    /// the teams ahead of you on the ladder.
+    pub fn step_goal(&mut self, delta: i64) {
+        let ahead: Vec<&Rung> = self.plan.ladder.iter().filter(|r| r.ahead >= 0).collect();
+        let Some(current) = ahead.iter().position(|r| Some(r.pos) == self.plan.goal) else {
+            return;
+        };
+        let next = (current as i64 + delta).clamp(0, ahead.len() as i64 - 1) as usize;
+        if next != current {
+            let key = account_key(ahead[next].account, &ahead[next].name);
+            self.set_goal(key);
         }
     }
 
@@ -638,6 +819,8 @@ impl BoardModel {
         ids.dedup();
 
         let mut items = Vec::new();
+        // (is you, team, challenge, points) of solves first seen just now.
+        let mut news: Vec<(bool, String, String, i64)> = Vec::new();
         let now = Instant::now();
         for id in ids {
             let name = self.name_of(id);
@@ -645,7 +828,8 @@ impl BoardModel {
             for c in self.changes_for(Some(id)).unwrap_or_default() {
                 let Some(cid) = c.challenge_id else { continue };
                 let solve_key = (key.clone(), cid);
-                if self.seen_solves.insert(solve_key.clone()) && mark_fresh {
+                let first_seen = self.seen_solves.insert(solve_key.clone()) && mark_fresh;
+                if first_seen {
                     self.fresh_solves.insert(solve_key.clone(), now);
                 }
                 let fresh = self
@@ -657,6 +841,16 @@ impl BoardModel {
                     .map(|ch| (ch.name.clone(), ch.category.clone()))
                     .or_else(|| self.data.names.get(&cid).cloned())
                     .unwrap_or_else(|| (format!("challenge {cid}"), String::new()));
+                // A newly fetched account brings its whole history; only
+                // what happened just now is news.
+                if first_seen && c.t >= self.now - NEWS_SECS {
+                    news.push((
+                        Some(id) == self.me_account,
+                        name.clone(),
+                        challenge.clone(),
+                        c.value,
+                    ));
+                }
                 items.push(FeedItem {
                     t: c.t,
                     account: id,
@@ -673,6 +867,43 @@ impl BoardModel {
         items.sort_by(|a, b| b.t.cmp(&a.t).then(a.team.cmp(&b.team)));
         items.truncate(FEED_LEN);
         self.feed = items;
+        self.notify_solves(news);
+    }
+
+    /// One notice per new solve, yours first; a busy update is summed up.
+    fn notify_solves(&mut self, mut news: Vec<(bool, String, String, i64)>) {
+        news.sort_by_key(|(mine, ..)| !mine);
+        let (mine, others): (Vec<_>, Vec<_>) = news.into_iter().partition(|(mine, ..)| *mine);
+        for (_, _, challenge, value) in mine {
+            self.notify(
+                NoticeKind::YourSolve,
+                format!("You solved {challenge}"),
+                format!("+{value} pts"),
+            );
+        }
+        if others.len() > NOTICE_SOLVES {
+            let points: i64 = others.iter().map(|(.., value)| value).sum();
+            let mut teams: Vec<&str> = others.iter().map(|(_, team, ..)| team.as_str()).collect();
+            teams.dedup();
+            let detail = match teams.as_slice() {
+                [one] => format!("{one}, +{points} pts"),
+                [first, rest @ ..] => format!("{first} and {} more, +{points} pts", rest.len()),
+                [] => String::new(),
+            };
+            self.notify(
+                NoticeKind::Solve,
+                format!("{} new solves", others.len()),
+                detail,
+            );
+        } else {
+            for (_, team, challenge, value) in others {
+                self.notify(
+                    NoticeKind::Solve,
+                    format!("{team} solved {challenge}"),
+                    format!("+{value} pts"),
+                );
+            }
+        }
     }
 
     fn momentum(&self, account: Option<u64>) -> Option<Momentum> {
@@ -833,8 +1064,14 @@ impl BoardModel {
                 }
             })
             .collect();
-        let goal = line
-            .map(|n| standings[n - 1].pos)
+        let picked = self.goal_key.as_ref().and_then(|key| {
+            ladder
+                .iter()
+                .find(|r| r.ahead >= 0 && account_key(r.account, &r.name) == *key)
+                .map(|r| r.pos)
+        });
+        let goal = picked
+            .or_else(|| line.map(|n| standings[n - 1].pos))
             .or_else(|| me.checked_sub(1).map(|i| standings[i].pos));
         self.plan = Plan {
             ladder,
