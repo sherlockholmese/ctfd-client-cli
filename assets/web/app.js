@@ -27,6 +27,7 @@
     hidden: new Set(), // series keys hidden via the legend
     linked: null, // series key highlighted from a table row
     refreshing: false,
+    goal: null, // ladder key picked as the Plan goal; null follows the server's
   };
 
   // ------------------------------------------------------------ theme
@@ -180,8 +181,9 @@
     return new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
 
+  // Absent entries (null, false) are skipped rather than printed.
   function replace(parent, nodes) {
-    parent.replaceChildren(...nodes);
+    parent.replaceChildren(...nodes.filter((n) => n !== null && n !== undefined && n !== false));
   }
 
   async function api(path, body) {
@@ -600,7 +602,6 @@
     $("cat-empty").hidden = enough;
     $("cat-empty").textContent = cats.length ? "Needs at least three categories" : "Nothing yet";
     node.hidden = !enough;
-    $("cat-legend").hidden = !enough;
     if (!enough || typeof echarts === "undefined") return;
     if (!radar.chart) radar.chart = makeChart(node);
 
@@ -616,12 +617,10 @@
         .map((c) => `${label(c)}: you ${num(c.mine_points)}${theirsKnown ? `, ${rival.name} ${num(c.theirs_points)}` : ""} of ${num(c.total_points)}`)
         .join("; "),
     );
-    replace($("cat-legend"), [
-      el("li", { class: "legend-item legend-static" }, el("span", { class: "swatch", style: `background:${meColor}` }), el("span", { text: "You" })),
-      theirsKnown
-        ? el("li", { class: "legend-item legend-static" }, el("span", { class: "swatch", style: `background:${rivalColor}` }), el("span", { text: rival.name, title: rival.name }))
-        : null,
-    ].filter(Boolean));
+    // The table's column heads double as the legend.
+    $("swatch-me").style.background = meColor;
+    $("swatch-rival").style.background = rivalColor;
+    $("swatch-rival").hidden = !theirsKnown;
 
     const tip = () => {
       const head = `<tr><th>Category</th><th>You</th>${theirsKnown ? `<th>${escapeHtml(rival.name)}</th><th>Gap</th>` : "<th>Of</th>"}</tr>`;
@@ -763,10 +762,10 @@
         onmouseleave: () => highlight(r.key, false),
       },
       el("td", { class: `num rank${r.pos <= 3 ? " rank-podium" : ""}`, text: r.pos }),
-      el("td", null, team),
+      el("td", { class: "col-name" }, team),
       el("td", { class: "num score", text: num(r.score) }),
-      el("td", { class: "num hide-sm muted", text: behind === null ? "" : behind === 0 ? "Tied" : num(behind) }),
-      el("td", { class: "num hide-sm" }, change),
+      el("td", { class: "num hide-sm col-behind muted", text: behind === null ? "" : behind === 0 ? "Tied" : num(behind) }),
+      el("td", { class: "num hide-sm col-move" }, change),
       el("td", null, actions),
     );
     return tr;
@@ -1011,31 +1010,73 @@
   $("rival-up").addEventListener("click", () => stepRival(-1));
   $("rival-down").addEventListener("click", () => stepRival(1));
 
-  function side(party, role) {
-    const s = state.snap;
-    if (!party) return [el("p", { class: "muted", text: role === "me" ? "Not ranked yet" : "No rival" })];
-    const m = party.momentum;
-    const label =
-      role === "me"
-        ? el("span", { class: "h2h-label" }, el("span", { class: "badge badge-solid badge-sm", text: "You" }), `#${party.pos}`)
-        : el("span", { class: "h2h-label" }, `#${party.pos}`, el("span", { class: "badge badge-outline badge-sm", text: "Rival" }));
-    const stat = (k, v) => el("div", { class: "stat" }, el("dt", { text: k }), el("dd", { text: v }));
-    const loading = role === "rival" && s.h2h.rival_loading;
-    return [
-      el("div", { class: "h2h-who" }, label, el("span", { class: "h2h-name", text: party.name, title: party.name })),
-      el("div", { class: "h2h-score" }, num(party.score), el("small", { text: "pts" })),
-      el(
-        "dl",
-        { class: "h2h-stats" },
-        stat("Solves", loading ? "…" : party.solves === null ? "—" : num(party.solves)),
-        stat("Last hour", m ? signed(m.last_hour) || "0" : "—"),
-        stat("Last 3 h", m ? signed(m.last_3h) || "0" : "—"),
-        stat("Last solve", m && m.last_solve ? agoLong(m.last_solve) : "—"),
-      ),
+  // One row per measure, you beside the rival, so each pair of numbers
+  // sits in a column and compares at a glance.
+  function versusRows(me, rival, rivalLoading) {
+    const dash = "—";
+    const pace = (p, k) => (p && p.momentum ? signed(p.momentum[k]) || "0" : dash);
+    const last = (p) => (p && p.momentum && p.momentum.last_solve ? agoLong(p.momentum.last_solve) : dash);
+    const solves = (p, loading) => (!p ? dash : loading ? "…" : p.solves === null ? dash : num(p.solves));
+    const rows = [
+      ["Rank", `#${me.pos}`, rival ? `#${rival.pos}` : dash],
+      ["Score", num(me.score), rival ? num(rival.score) : dash],
+      ["Solves", solves(me, false), solves(rival, rivalLoading)],
+      ["Last hour", pace(me, "last_hour"), pace(rival, "last_hour")],
+      ["Last 3 h", pace(me, "last_3h"), pace(rival, "last_3h")],
+      ["Last solve", last(me), last(rival)],
     ];
+    return rows.map(([label, mine, theirs]) =>
+      el("tr", null, el("th", { scope: "row", text: label }), el("td", { class: "num", text: mine }), el("td", { class: "num", text: theirs })),
+    );
   }
 
   // ------------------------------------------------------------ plan
+
+  // Why a target stands out.  Keys come from the server; an unknown key
+  // shows nothing rather than the key itself.
+  const REASONS = {
+    quick_win: { label: () => "Quick win", title: "Most of the field has solved it" },
+    trending: { label: (t) => `${t.recent} solves this hour`, title: "Solved in the last hour by teams whose solves are tracked" },
+    strength: { label: () => "Your category", title: "You solve more of this category than your average" },
+    rival: { label: () => "Rival has it", title: "Solved by the team you compare with on Analysis" },
+    unsolved: { label: () => "No solves yet", title: "Nobody has solved it" },
+  };
+
+  const pct = (p) => (p > 0 && p < 0.005 ? "<1%" : `${Math.round(p * 100)}%`);
+  const solvesText = (n) => `${n} ${n === 1 ? "solve" : "solves"}`;
+
+  // The rung the route aims at: the picked one while it is still ahead,
+  // else the server's default (the qualifying line, or the team above).
+  function goalRung() {
+    const plan = state.snap.plan;
+    const ahead = plan.ladder.filter((r) => r.ahead >= 0);
+    return (
+      ahead.find((r) => r.key === state.goal) ??
+      ahead.find((r) => r.pos === plan.goal) ??
+      ahead[ahead.length - 1] ??
+      null
+    );
+  }
+
+  const goalSelect = $("goal");
+  goalSelect.addEventListener("change", () => {
+    state.goal = goalSelect.value;
+    renderPlan();
+  });
+
+  // Rebuilt only when the choices change, so an open menu is left alone.
+  function renderGoalPicker(goal) {
+    const s = state.snap;
+    const ahead = s.plan.ladder.filter((r) => r.ahead >= 0);
+    const label = (r) => (s.cutoff && r.pos === s.cutoff ? `#${r.pos} ${r.name} (top ${s.cutoff})` : `#${r.pos} ${r.name}`);
+    const signature = ahead.map((r) => `${r.key}\n${label(r)}`).join("\n\n");
+    if (goalSelect.dataset.signature !== signature) {
+      goalSelect.dataset.signature = signature;
+      replace(goalSelect, ahead.map((r) => el("option", { value: r.key, text: label(r) })));
+    }
+    goalSelect.closest(".row").hidden = ahead.length === 0;
+    if (goal) goalSelect.value = goal.key;
+  }
 
   function renderPlan() {
     const s = state.snap;
@@ -1049,49 +1090,67 @@
     }
     $("th-ladder-name").textContent = s.noun === "team" ? "Team" : "Player";
 
+    const goal = goalRung();
+    renderGoalPicker(goal);
+
     // Headline numbers.
     const leader = plan.ladder.find((r) => r.pos === 1 && r.ahead >= 0);
-    const next = [...plan.ladder].reverse().find((r) => r.ahead >= 0);
     const open = plan.targets.reduce((sum, t) => sum + t.value, 0);
     const best = plan.targets.length ? plan.targets[plan.targets.length - 1].reach : me.pos;
     const stat = (k, v, sub, cls) =>
       el("div", { class: "stat plan-stat" }, el("dt", { text: k }), el("dd", { class: cls }, v, sub ? el("small", { text: sub }) : null));
-    const passIn = (r) => (r.solves ? `${r.solves} ${r.solves === 1 ? "solve" : "solves"}` : "Out of reach");
+    const passIn = (r) => (r.solves ? solvesText(r.solves) : "Out of reach");
+    const gain = (r) => (r.points ? `+${num(r.points)}` : null);
+    const goalName = goal && (s.cutoff && goal.pos === s.cutoff ? `To reach top ${s.cutoff}` : `To pass #${goal.pos}`);
     replace($("plan-stats"), [
       stat("Rank", `#${me.pos}`, `${num(me.score)} pts`),
       leader ? stat("Behind #1", num(leader.ahead), null, "neg") : stat("Lead", num(-(plan.ladder.find((r) => r.ahead < 0)?.ahead ?? 0)), "pts", "pos"),
-      leader ? stat("To take #1", passIn(leader), leader.points ? `+${num(leader.points)}` : null) : null,
-      next && next !== leader ? stat(`To pass #${next.pos}`, passIn(next), next.points ? `+${num(next.points)}` : null) : null,
+      goal && goal !== leader ? stat(goalName, passIn(goal), gain(goal)) : null,
+      leader ? stat("To take #1", passIn(leader), gain(leader)) : null,
       stat("Open", num(open), `pts in ${plan.targets.length} ${plan.targets.length === 1 ? "challenge" : "challenges"}`),
       stat("Best reach", `#${best}`),
     ]);
 
-    // Targets, most likely points first, with a line after each solve
-    // that overtakes someone.
-    const targets = [];
-    for (const t of plan.targets) {
-      const pct = Math.round(t.share * 100);
-      targets.push(
+    // The route to the goal first, in the order to try it, closed by a
+    // line; then everything else, most likely points first.
+    const byId = new Map(plan.targets.map((t) => [t.id, t]));
+    const route = goal ? goal.route.map((id) => byId.get(id)).filter(Boolean) : [];
+    const onRoute = new Set(route.map((t) => t.id));
+    const targetRow = (t, step) => {
+      const reason = REASONS[t.reason];
+      const field = t.solves !== null ? `${num(t.solves)} of ${num(s.standings.length)} ${s.noun}s solved it` : `${t.top_solves} of the top ${s.top_n} solved it`;
+      return el(
+        "tr",
+        { class: step ? "on-route" : null },
         el(
-          "tr",
-          null,
-          ...challengeCells(t),
-          el(
-            "td",
-            { class: "num" },
-            el("span", { class: "pop", title: t.solves !== null ? `${num(t.solves)} solves` : `${t.top_solves} of the top ${s.top_n}` }, el("span", { text: `${pct}%` }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${pct}%` }))),
-          ),
+          "td",
+          { class: "col-name" },
+          el("span", { class: "chal" }, step ? el("span", { class: "step", text: step, title: `Step ${step} of the route` }) : null, el("span", { class: "chal-name", text: t.name, title: t.name })),
         ),
+        el("td", { class: "hide-sm cat", text: t.category }),
+        el("td", { class: "num", text: num(t.value) }),
+        el(
+          "td",
+          { class: "num" },
+          el("span", { class: "pop", title: field }, el("span", { text: pct(t.odds) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round(t.odds * 100)}%` }))),
+        ),
+        el("td", { class: "hide-sm col-why why", text: reason ? reason.label(t) : "", title: reason ? reason.title : null }),
       );
-      if (t.passes) {
-        targets.push(
-          el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 4 }, el("span", { text: `Passes ${t.passes} for #${t.reach}`, title: `${num(t.running)} points from here up` }))),
-        );
-      }
+    };
+    const targets = route.map((t, i) => targetRow(t, i + 1));
+    if (route.length) {
+      const label = s.cutoff && goal.pos === s.cutoff ? `Reaches top ${s.cutoff}, past ${goal.name}` : `Passes ${goal.name} for #${goal.pos}`;
+      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 5 }, el("span", { text: label }))));
     }
+    for (const t of plan.targets) if (!onRoute.has(t.id)) targets.push(targetRow(t, 0));
     replace($("targets-body"), targets);
     $("targets-empty").hidden = targets.length > 0;
     $("targets-empty").textContent = s.h2h.categories.length ? "Nothing left" : "Challenges aren't visible yet";
+
+    const note = $("route-note");
+    if (!goal) note.textContent = plan.targets.length ? "You lead the board" : "";
+    else if (!route.length) note.textContent = `Not enough open points to pass #${goal.pos}`;
+    else note.textContent = `${solvesText(route.length)} for +${num(goal.points)}, ${pct(goal.odds)} chance of landing ${route.length === 1 ? "it" : "all"}`;
 
     // Ladder, with you in your place.
     const rows = [];
@@ -1100,10 +1159,11 @@
         "tr",
         { class: "is-me" },
         el("td", { class: "num col-rank", text: me.pos }),
-        el("td", null, el("div", { class: "team" }, el("span", { class: "team-name", text: me.name, title: me.name }), el("span", { class: "badge badge-solid badge-sm", text: "You" }))),
+        el("td", { class: "col-name" }, el("div", { class: "team" }, el("span", { class: "team-name", text: me.name, title: me.name }), el("span", { class: "badge badge-solid badge-sm", text: "You" }))),
         el("td"),
         el("td", { class: "hide-sm" }),
         el("td"),
+        el("td", { class: "hide-sm" }),
       );
     let placed = false;
     for (const r of plan.ladder) {
@@ -1113,15 +1173,17 @@
       }
       const gap = -r.ahead;
       const m = r.momentum;
+      const isGoal = r === goal;
       rows.push(
         el(
           "tr",
-          null,
+          { class: isGoal ? "is-goal" : null },
           el("td", { class: "num col-rank", text: r.pos }),
-          el("td", null, el("div", { class: "team" }, el("span", { class: "team-name", text: r.name, title: r.name }))),
+          el("td", { class: "col-name" }, el("div", { class: "team" }, el("span", { class: "team-name", text: r.name, title: r.name }), isGoal ? el("span", { class: "badge badge-outline badge-sm", text: "Goal" }) : null)),
           el("td", { class: `num ${gap > 0 ? "delta-up" : gap < 0 ? "delta-down" : "muted"}`, text: signed(gap) || "0" }),
           el("td", { class: "num hide-sm", text: m ? signed(m.last_hour) || "0" : "—" }),
-          el("td", { class: "num", title: r.points ? `+${num(r.points)}` : null, text: r.ahead < 0 ? "" : r.solves ? num(r.solves) : "—" }),
+          el("td", { class: "num", title: r.points ? `+${num(r.points)}` : null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
+          el("td", { class: "num hide-sm muted", text: r.ahead < 0 || r.odds === null ? "" : pct(r.odds) }),
         ),
       );
     }
@@ -1135,8 +1197,10 @@
           "tr",
           null,
           el("td", { class: "cat-name", text: f.category || "Uncategorized" }),
+          el("td", { class: "num muted", text: `${f.mine}/${f.total}` }),
           el("td", { class: "num", text: num(f.open) }),
-          el("td", { class: "num", text: num(f.points) }),
+          el("td", { class: "num hide-sm", text: num(f.points) }),
+          el("td", { class: "num", text: num(Math.round(f.expected)) }),
         ),
       ),
     );
@@ -1145,8 +1209,8 @@
 
   function challengeCells(c) {
     return [
-      el("td", null, el("span", { class: "chal-name", text: c.name, title: c.name })),
-      el("td", { class: "hide-sm cat", text: c.category }),
+      el("td", { class: "col-name" }, el("span", { class: "chal-name", text: c.name, title: c.name })),
+      el("td", { class: "hide-sm col-cat cat", text: c.category }),
       el("td", { class: "num", text: num(c.value) }),
     ];
   }
@@ -1168,25 +1232,27 @@
     const hasMe = !!h.me;
     $("analysis-empty").hidden = hasMe;
     $("analysis-body").hidden = !hasMe;
-    $("rival-up").disabled = !hasMe;
-    $("rival-down").disabled = !hasMe;
-    $("rival-reset").disabled = !hasMe;
     if (!hasMe) {
       $("analysis-empty").textContent = `Your ${s.noun} isn't on the scoreboard yet`;
       return;
     }
 
-    replace($("h2h-me"), side(h.me, "me"));
-    replace($("h2h-rival"), side(h.rival, "rival"));
+    replace($("h2h-rows"), versusRows(h.me, h.rival, h.rival_loading));
 
-    const gapNode = $("h2h-gap");
+    // The verdict: how far apart, then where the qualifying line is.
     const gap = [];
     if (h.rival) {
       const d = h.me.score - h.rival.score;
-      gap.push(el("span", { class: `h2h-gap-num${d > 0 ? " ahead" : d < 0 ? " behind" : ""}`, text: d === 0 ? "Tied" : num(Math.abs(d)) }));
-      gap.push(el("span", { class: "h2h-gap-text", text: d === 0 ? "on points" : d > 0 ? "ahead" : "behind" }));
+      gap.push(
+        el(
+          "p",
+          { class: "versus-verdict" },
+          el("span", { class: `versus-num${d > 0 ? " ahead" : d < 0 ? " behind" : ""}`, text: d === 0 ? "Tied" : num(Math.abs(d)) }),
+          el("span", { class: "versus-word", text: d === 0 ? "on points" : d > 0 ? "ahead" : "behind" }),
+        ),
+      );
     } else {
-      gap.push(el("span", { class: "h2h-gap-text", text: "No rival" }));
+      gap.push(el("p", { class: "versus-verdict" }, el("span", { class: "versus-word", text: "No rival" })));
     }
     if (h.cutoff) {
       const c = h.cutoff;
@@ -1195,9 +1261,9 @@
           ? `Qualifying by ${num(c.points)}`
           : "Qualifying on tiebreak"
         : `${num(Math.abs(c.points))} short of top ${s.cutoff}`;
-      gap.push(el("span", { class: "badge badge-outline h2h-cutoff", text }));
+      gap.push(el("p", { class: "versus-line", text }));
     }
-    replace(gapNode, gap);
+    replace($("h2h-gap"), gap);
 
     // Catch-up targets.
     const catchBody = [];
@@ -1211,7 +1277,7 @@
       let running = 0;
       h.catch_up.forEach((c, i) => {
         running += c.value;
-        catchBody.push(el("tr", null, ...challengeCells(c), popularity(c), el("td", { class: "num hide-sm muted", text: num(running) })));
+        catchBody.push(el("tr", null, ...challengeCells(c), popularity(c), el("td", { class: "num hide-sm col-extra muted", text: num(running) })));
         if (i === h.closes_gap_at && i < h.catch_up.length - 1) {
           const gapPts = h.rival.score - h.me.score;
           catchBody.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 5 }, el("span", { text: `Passes ${h.rival.name}`, title: `Solving down to here closes the ${num(gapPts)} point gap` }))));
@@ -1228,7 +1294,7 @@
     $("edge-empty").textContent = !h.rival ? "No rival" : h.rival_loading ? "Loading…" : "Nothing yet";
 
     // Field.
-    const fieldRows = h.field.map((c) => el("tr", null, ...challengeCells(c), popularity(c), el("td", { class: "num hide-sm muted", text: c.solves === null ? "—" : num(c.solves) })));
+    const fieldRows = h.field.map((c) => el("tr", null, ...challengeCells(c), popularity(c), el("td", { class: "num hide-sm col-extra muted", text: c.solves === null ? "—" : num(c.solves) })));
     replace($("field-body"), fieldRows);
     $("field-empty").hidden = fieldRows.length > 0;
 
@@ -1274,7 +1340,7 @@
 
   function connect() {
     if (!KEY) {
-      showFatal("This page needs the link ctfdc printed", "Run ctfdc lb --web and open the link it shows. The key at the end of it is required.");
+      showFatal("This page needs the link ctfdc printed", "Run ctfdc lb and open the link it shows. The key at the end of it is required.");
       return;
     }
     const source = new EventSource(`api/events?k=${encodeURIComponent(KEY)}`);
@@ -1300,7 +1366,7 @@
             showFatal("This link has expired", "ctfdc makes a new link each time it starts. Open the link it printed most recently.");
           }
         } catch {
-          showFatal("Can't reach ctfdc", "Start it again with ctfdc lb --web.");
+          showFatal("Can't reach ctfdc", "Start it again with ctfdc lb.");
         }
       }
     });
@@ -1315,6 +1381,7 @@
     $("host").textContent = "Not connected";
     $("view-board").hidden = true;
     $("view-analysis").hidden = true;
+    $("view-plan").hidden = true;
   }
 
   showView(state.view);

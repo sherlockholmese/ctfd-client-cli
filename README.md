@@ -24,7 +24,7 @@ Running `ctfdc` with no arguments prints this quick start, and every command has
 | `status` | `ls`, `st` | Challenges by category with IDs, solved state and progress |
 | `download` | `dl` | Download challenges and attachments (safe to re-run) |
 | `submit` | `s` | Submit flags by folder, ID, or name |
-| `leaderboard` | `lb`, `scoreboard` | Live scoreboard with graph and rival analysis (`--web` for the browser, `--print` for text) |
+| `leaderboard` | `lb`, `scoreboard` | Live scoreboard with graph, rival analysis and a plan of what to solve next (in your browser; `--tui` for the terminal, `--print` for text) |
 | `completions <SHELL>` | | Shell completion script |
 
 ## Setup
@@ -55,7 +55,7 @@ Precedence: `--url`/`--token` > `CTFD_URL`/`CTFD_TOKEN` > nearest `ctfd.toml`. T
 ctfdc init 'https://ctf.example.com/login?token=...'
 ```
 
-`init` recognises rCTF on its own (by its public client config) and saves `platform = "rctf"` with your team token in `ctfd.toml`; `--platform rctf` (or `CTFD_PLATFORM`) forces it. Every command then works the same: `ls`, `dl`, `s`, and `lb` in the terminal or `--web`. rCTF challenge and team IDs are strings, so `ctfdc` shows a stable number for each (submit by folder or name as usual). Attachments are downloaded without your token, since rCTF serves them from public storage.
+`init` recognises rCTF on its own (by its public client config) and saves `platform = "rctf"` with your team token in `ctfd.toml`; `--platform rctf` (or `CTFD_PLATFORM`) forces it. Every command then works the same: `ls`, `dl`, `s`, and `lb` in the browser or the terminal. rCTF challenge and team IDs are strings, so `ctfdc` shows a stable number for each (submit by folder or name as usual). Attachments are downloaded without your token, since rCTF serves them from public storage.
 
 Tab completion means fewer things to remember:
 
@@ -162,12 +162,15 @@ Exit codes: `0` correct or already solved, `2` incorrect, `1` errors (network, u
 ## Scoreboard
 
 ```sh
-ctfdc lb                 # live full-screen scoreboard
+ctfdc lb                 # live scoreboard in your browser
+ctfdc lb --tui           # live scoreboard in the terminal
 ctfdc lb --print         # print once as text (-p; also what you get when piped)
 ctfdc lb --demo          # try the live view on fictional, simulated data
 ```
 
-The live view updates every 15 seconds (`-n SECS`), keeps the last good data on screen if an update fails, and has three tabs (`Tab` switches):
+`ctfdc lb` serves the live scoreboard on your machine and opens it in your browser. Where no browser can be opened (over SSH, or on Linux without a desktop session or `xdg-open`) it runs in the terminal instead and says so; `--web` serves the page anyway and prints its link. `--tui` always uses the terminal.
+
+Both views update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have three tabs (`Tab` switches in the terminal):
 
 - **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `l` switches layout.
 - **Analysis**: you against a rival (the team above you by default; `<-`/`->` changes it). The first two lines say where you stand and what to do: how far behind or ahead you are, your margin to the qualifying line, and how many catch-up challenges it takes to pass them. Below that:
@@ -177,23 +180,25 @@ The live view updates every 15 seconds (`-n SECS`), keeps the last good data on 
   - **Points by category**: a radar of the share of each category's points you and the rival hold, with the raw numbers on hover (web) and the biggest gaps underneath (terminal).
   - **Your edge**: challenges you have that they don't.
 - **Plan**: you against the whole board, for deciding what to work on next (`3` or `Tab` again).
-  - **Best targets**: every challenge you haven't solved, ranked by expected points (points × the share of teams that solved it), with a running total and the rank you would reach, if nobody else scores.
-  - **Path to the top**: the top 3, the teams just above you and the two just behind, each with the gap, their last hour, and how many of your best targets it takes to pass them.
-  - **Where to focus**: categories by the expected points still open.
+  - **Best targets**: every challenge you haven't solved, ranked by expected points: its points × your odds of solving it. The odds start from the share of teams that solved it and shift with your record in its category (a category you solve more of than your average counts for you, one you solve less of against). A challenge nobody has solved is unlikely, not impossible. In the browser each target also says why it stands out: a quick win, solved several times in the last hour, in your category, already solved by your rival, or not solved by anyone.
+  - **Route** (browser): pick a team to pass, by default the last qualifying place when you are outside it, else the team above you. The solves most likely to all land that gain enough points to pass them are listed first, in the order to try them, with the points they bring and the chance of landing every one.
+  - **Path to the top**: the top 3, the teams just above you and the two just behind (and the last qualifying place), each with the gap, their last hour, and the number of solves on the likeliest route past them.
+  - **Where to focus**: categories by the expected points still open, with how many of each you have solved.
 
-Press `?` in the live view for every key.
+Press `?` in the terminal view for every key.
 
 ### In the browser
 
 ```sh
-ctfdc lb --web                       # serve the live scoreboard and open it in your browser (-w)
-ctfdc lb --web --demo                # the same on fictional data
-ctfdc lb --web --port 8080 --no-open # fixed port, print the link instead of opening it
+ctfdc lb                       # serve the live scoreboard and open it in your browser
+ctfdc lb --demo                # the same on fictional data
+ctfdc lb --port 8080 --no-open # fixed port, print the link instead of opening it
+ctfdc lb --web                 # serve it even where no browser can be opened (-w)
 ```
 
-The web view shows the same Board, Analysis and Plan as the terminal, with an interactive score graph (hover for everyone's score at that moment, ranges from `All` down to the last `30m`, click a legend entry to hide a line). Hovering a team in the standings highlights its line. `Compare` on any row opens Analysis against that team, and the pin button adds a team outside the top N to the graph. It follows your system's light/dark setting, and the sun/moon button switches it. `--since`, `--cutoff`, `--top` and `-n` work as in the terminal.
+The web view shows the same Board, Analysis and Plan as the terminal, with an interactive score graph (hover for everyone's score at that moment, ranges from `All` down to the last `30m`, click a legend entry to hide a line). Hovering a team in the standings highlights its line. `Compare` on any row opens Analysis against that team, and the pin button adds a team outside the top N to the graph. On a desktop-sized window (at least 1024 × 640) each tab fits the window: the page itself never scrolls, only the lists inside it do. Smaller windows stack the same sections and scroll. It follows your system's light/dark setting, and the sun/moon button switches it. `--since`, `--cutoff`, `--top` and `-n` work as in the terminal.
 
-The server listens on `127.0.0.1` only (`--bind ADDR` to change it; ctfdc warns when it isn't a loopback address). It makes every CTFd request itself, so your API token never reaches the browser. Each run prints a new link ending in `#k=<key>`, and the page only works with that key, so other users on the machine and other sites in your browser can't read or change the board. To view it from another machine, forward the port over SSH (`ssh -L 8080:127.0.0.1:8080 host`, then run with `--port 8080`). Charts use the vendored [Apache ECharts](https://echarts.apache.org/) 5.6.0 (`assets/web/vendor`, Apache-2.0), so the page needs no internet access.
+The server listens on `127.0.0.1` only (`--bind ADDR` to change it; ctfdc warns when it isn't a loopback address). It makes every CTFd request itself, so your API token never reaches the browser. Each run prints a new link ending in `#k=<key>`, and the page only works with that key, so other users on the machine and other sites in your browser can't read or change the board. To view it from another machine, forward the port over SSH (`ssh -L 8080:127.0.0.1:8080 host`, then run with `--port 8080`, which serves the page and prints the link). Charts use the vendored [Apache ECharts](https://echarts.apache.org/) 5.6.0 (`assets/web/vendor`, Apache-2.0), so the page needs no internet access.
 
 ### Qualifying line
 

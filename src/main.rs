@@ -22,10 +22,12 @@ async fn main() -> anyhow::Result<()> {
             if args.cutoff.is_none() {
                 args.cutoff = config::workspace_qualify()?;
             }
-            if args.web {
-                return web::run_demo(args).await;
-            }
-            return tui::run_demo(args).await;
+            // There is no text form of the demo: without a terminal the
+            // terminal view explains what to run instead.
+            return match commands::leaderboard::view_here(&args) {
+                commands::leaderboard::View::Web => web::run_demo(args).await,
+                _ => tui::run_demo(args).await,
+            };
         }
         Commands::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "ctfdc", &mut std::io::stdout());

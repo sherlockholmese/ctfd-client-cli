@@ -21,7 +21,10 @@ fn ensure_terminal() -> anyhow::Result<()> {
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
         Ok(())
     } else {
-        anyhow::bail!("The live scoreboard needs an interactive terminal. Use `ctfdc lb --plain`.")
+        anyhow::bail!(
+            "The terminal scoreboard needs an interactive terminal. Use `ctfdc lb --plain` \
+             for text or `ctfdc lb --web` for the page."
+        )
     }
 }
 

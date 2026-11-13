@@ -85,172 +85,173 @@
         </div>
       </article>
 
-      <div class="board-grid">
-        <article class="card">
-          <header class="card-header row">
-            <h2 class="card-title">Standings</h2>
-            <div class="row gap-2">
-              <label class="input-wrap">
-                <svg class="icon"><use href="#i-search"/></svg>
-                <span class="sr-only">Find a team</span>
-                <input class="input" id="search" type="search" placeholder="Find a team" autocomplete="off" spellcheck="false">
-              </label>
-              <button class="btn btn-outline" id="jump-me" type="button">
-                <svg class="icon"><use href="#i-locate"/></svg>
-                <span>You</span>
-              </button>
-            </div>
-          </header>
-          <div class="table-scroll" id="standings-scroll">
-            <table class="table" id="standings">
-              <thead>
-                <tr>
-                  <th class="num col-rank" scope="col">#</th>
-                  <th scope="col" id="th-name">Team</th>
-                  <th class="num" scope="col">Score</th>
-                  <th class="num hide-sm" scope="col">Behind</th>
-                  <th class="num hide-sm" scope="col" title="Movement in the last 15 minutes">15 min</th>
-                  <th class="col-actions" scope="col"><span class="sr-only">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody id="standings-body"></tbody>
-            </table>
-            <p class="empty" id="standings-empty" hidden></p>
+      <article class="card standings-card">
+        <header class="card-header row">
+          <h2 class="card-title">Standings</h2>
+          <div class="row gap-2">
+            <label class="input-wrap">
+              <svg class="icon"><use href="#i-search"/></svg>
+              <span class="sr-only">Find a team</span>
+              <input class="input" id="search" type="search" placeholder="Find a team" autocomplete="off" spellcheck="false">
+            </label>
+            <button class="btn btn-outline" id="jump-me" type="button">
+              <svg class="icon"><use href="#i-locate"/></svg>
+              <span>You</span>
+            </button>
           </div>
-        </article>
+        </header>
+        <div class="table-scroll" id="standings-scroll">
+          <table class="table" id="standings">
+            <thead>
+              <tr>
+                <th class="num col-rank" scope="col">#</th>
+                <th scope="col" id="th-name">Team</th>
+                <th class="num" scope="col">Score</th>
+                <th class="num hide-sm col-behind" scope="col">Behind</th>
+                <th class="num hide-sm col-move" scope="col" title="Movement in the last 15 minutes">15 min</th>
+                <th class="col-actions" scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="standings-body"></tbody>
+          </table>
+          <p class="empty" id="standings-empty" hidden></p>
+        </div>
+      </article>
 
-        <article class="card">
-          <header class="card-header">
-            <h2 class="card-title">Latest solves</h2>
-          </header>
-          <div class="table-scroll">
-            <ol class="feed" id="feed"></ol>
-            <p class="empty" id="feed-empty" hidden>No solves yet</p>
-          </div>
-        </article>
-      </div>
+      <article class="card feed-card">
+        <header class="card-header">
+          <h2 class="card-title">Latest solves</h2>
+        </header>
+        <div class="table-scroll">
+          <ol class="feed" id="feed"></ol>
+          <p class="empty" id="feed-empty" hidden>No solves yet</p>
+        </div>
+      </article>
     </section>
 
-    <!-- Analysis -->
+    <!-- Analysis: you against one rival -->
     <section id="view-analysis" role="tabpanel" aria-labelledby="tab-analysis" class="view" hidden>
-      <div class="analysis-bar">
-        <div class="row gap-2 wrap">
-          <label class="label" for="rival">Compare with</label>
-          <div class="combo" id="rival-combo">
-            <button class="select" id="rival" type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="rival-pop">
-              <span class="select-value" id="rival-value"></span>
-              <svg class="icon"><use href="#i-updown"/></svg>
-            </button>
-            <div class="popover" id="rival-pop" hidden>
-              <label class="combo-search">
-                <svg class="icon"><use href="#i-search"/></svg>
-                <span class="sr-only">Find a team</span>
-                <input id="rival-search" type="text" role="combobox" aria-expanded="true" aria-controls="rival-list" aria-autocomplete="list" placeholder="Find a team" autocomplete="off" spellcheck="false">
-              </label>
-              <ul class="combo-list" id="rival-list" role="listbox" aria-label="Teams"></ul>
-              <p class="combo-empty" id="rival-none" hidden>No match</p>
-            </div>
-          </div>
-          <div class="btn-group">
-            <button class="btn btn-outline btn-icon" id="rival-up" type="button" aria-label="Team ranked above" title="Team ranked above">
-              <svg class="icon"><use href="#i-left"/></svg>
-            </button>
-            <button class="btn btn-outline btn-icon" id="rival-down" type="button" aria-label="Team ranked below" title="Team ranked below">
-              <svg class="icon"><use href="#i-right"/></svg>
-            </button>
-          </div>
-          <button class="btn btn-ghost" id="rival-reset" type="button" title="Compare with the team ranked above you">Reset</button>
-        </div>
-      </div>
-
       <p class="empty empty-lg" id="analysis-empty" hidden></p>
 
       <div id="analysis-body">
-        <article class="card h2h">
-          <div class="h2h-side" id="h2h-me"></div>
-          <div class="h2h-gap" id="h2h-gap"></div>
-          <div class="h2h-side h2h-right" id="h2h-rival"></div>
+        <!-- Who you compare with and how you stand, read top to bottom. -->
+        <aside class="card versus" aria-label="Comparison">
+          <div class="versus-pick">
+            <div class="row versus-pick-head">
+              <label class="label" for="rival">Compare with</label>
+              <button class="btn btn-ghost btn-sm" id="rival-reset" type="button" title="Compare with the team ranked above you">Reset</button>
+            </div>
+            <div class="row gap-2">
+              <div class="combo" id="rival-combo">
+                <button class="select" id="rival" type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="rival-pop">
+                  <span class="select-value" id="rival-value"></span>
+                  <svg class="icon"><use href="#i-updown"/></svg>
+                </button>
+                <div class="popover" id="rival-pop" hidden>
+                  <label class="combo-search">
+                    <svg class="icon"><use href="#i-search"/></svg>
+                    <span class="sr-only">Find a team</span>
+                    <input id="rival-search" type="text" role="combobox" aria-expanded="true" aria-controls="rival-list" aria-autocomplete="list" placeholder="Find a team" autocomplete="off" spellcheck="false">
+                  </label>
+                  <ul class="combo-list" id="rival-list" role="listbox" aria-label="Teams"></ul>
+                  <p class="combo-empty" id="rival-none" hidden>No match</p>
+                </div>
+              </div>
+              <div class="btn-group">
+                <button class="btn btn-outline btn-icon" id="rival-up" type="button" aria-label="Team ranked above" title="Team ranked above">
+                  <svg class="icon"><use href="#i-left"/></svg>
+                </button>
+                <button class="btn btn-outline btn-icon" id="rival-down" type="button" aria-label="Team ranked below" title="Team ranked below">
+                  <svg class="icon"><use href="#i-right"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="versus-gap" id="h2h-gap"></div>
+
+          <table class="table table-compact versus-table">
+            <thead>
+              <tr>
+                <td></td>
+                <th class="num" scope="col"><span class="swatch" id="swatch-me" aria-hidden="true"></span>You</th>
+                <th class="num" scope="col"><span class="swatch" id="swatch-rival" aria-hidden="true"></span>Rival</th>
+              </tr>
+            </thead>
+            <tbody id="h2h-rows"></tbody>
+          </table>
+
+          <div class="versus-chart">
+            <h2 class="card-title">Points by category</h2>
+            <div class="chart chart-radar" id="cat-chart" role="img" aria-label="Share of each category's points"></div>
+            <p class="empty" id="cat-empty" hidden>Nothing yet</p>
+          </div>
+        </aside>
+
+        <article class="card catch-card">
+          <header class="card-header row">
+            <h2 class="card-title">Catch-up targets</h2>
+          </header>
+          <div class="table-scroll">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th scope="col">Challenge</th>
+                  <th scope="col" class="hide-sm col-cat">Category</th>
+                  <th class="num" scope="col">Points</th>
+                  <th class="num" scope="col" id="th-top">Top 10</th>
+                  <th class="num hide-sm col-extra" scope="col">Running</th>
+                </tr>
+              </thead>
+              <tbody id="catch-body"></tbody>
+            </table>
+            <p class="empty" id="catch-empty" hidden></p>
+          </div>
         </article>
 
-        <div class="analysis-grid">
-          <article class="card catch-card">
-            <header class="card-header row">
-              <h2 class="card-title">Catch-up targets</h2>
-            </header>
-            <div class="table-scroll">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th scope="col">Challenge</th>
-                    <th scope="col" class="hide-sm">Category</th>
-                    <th class="num" scope="col">Points</th>
-                    <th class="num" scope="col" id="th-top">Top 10</th>
-                    <th class="num hide-sm" scope="col">Running</th>
-                  </tr>
-                </thead>
-                <tbody id="catch-body"></tbody>
-              </table>
-              <p class="empty" id="catch-empty" hidden></p>
-            </div>
-          </article>
-
-          <div class="analysis-side">
-          <article class="card">
-            <header class="card-header">
-              <h2 class="card-title">Points by category</h2>
-            </header>
-            <div class="card-content">
-              <div class="chart chart-radar" id="cat-chart" role="img" aria-label="Share of each category's points"></div>
-              <p class="empty" id="cat-empty" hidden>Nothing yet</p>
-              <ul class="legend" id="cat-legend" aria-hidden="true"></ul>
-            </div>
-          </article>
-
-          <article class="card">
-            <header class="card-header">
-              <h2 class="card-title">Your edge</h2>
-            </header>
-            <div class="table-scroll table-scroll-sm">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th scope="col">Challenge</th>
-                    <th scope="col" class="hide-sm">Category</th>
-                    <th class="num" scope="col">Points</th>
-                  </tr>
-                </thead>
-                <tbody id="edge-body"></tbody>
-              </table>
-              <p class="empty" id="edge-empty" hidden></p>
-            </div>
-          </article>
-
-          <article class="card">
-            <header class="card-header">
-              <h2 class="card-title">Unsolved by both</h2>
-            </header>
-            <div class="table-scroll table-scroll-sm">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th scope="col">Challenge</th>
-                    <th scope="col" class="hide-sm">Category</th>
-                    <th class="num" scope="col">Points</th>
-                    <th class="num" scope="col" id="th-field-top">Top 10</th>
-                    <th class="num hide-sm" scope="col">All solves</th>
-                  </tr>
-                </thead>
-                <tbody id="field-body"></tbody>
-              </table>
-              <p class="empty" id="field-empty" hidden>Nothing left</p>
-            </div>
-          </article>
+        <article class="card field-card">
+          <header class="card-header row">
+            <h2 class="card-title">Unsolved by both</h2>
+          </header>
+          <div class="table-scroll table-scroll-sm">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th scope="col">Challenge</th>
+                  <th scope="col" class="hide-sm col-cat">Category</th>
+                  <th class="num" scope="col">Points</th>
+                  <th class="num" scope="col" id="th-field-top">Top 10</th>
+                  <th class="num hide-sm col-extra" scope="col">All solves</th>
+                </tr>
+              </thead>
+              <tbody id="field-body"></tbody>
+            </table>
+            <p class="empty" id="field-empty" hidden>Nothing left</p>
           </div>
-        </div>
+        </article>
+
+        <article class="card edge-card">
+          <header class="card-header row">
+            <h2 class="card-title">Your edge</h2>
+          </header>
+          <div class="table-scroll table-scroll-sm">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th scope="col">Challenge</th>
+                  <th scope="col" class="hide-sm col-cat">Category</th>
+                  <th class="num" scope="col">Points</th>
+                </tr>
+              </thead>
+              <tbody id="edge-body"></tbody>
+            </table>
+            <p class="empty" id="edge-empty" hidden></p>
+          </div>
+        </article>
       </div>
     </section>
 
-    <!-- Plan: the climb to the top -->
+    <!-- Plan: what to solve next -->
     <section id="view-plan" role="tabpanel" aria-labelledby="tab-plan" class="view" hidden>
       <p class="empty empty-lg" id="plan-empty" hidden></p>
       <div id="plan-body">
@@ -258,10 +259,20 @@
           <dl class="plan-stats" id="plan-stats"></dl>
         </article>
 
-        <div class="analysis-grid">
+        <div class="plan-grid">
           <article class="card catch-card">
-            <header class="card-header">
-              <h2 class="card-title">Best targets</h2>
+            <header class="card-header row">
+              <div class="card-heading">
+                <h2 class="card-title">Best targets</h2>
+                <p class="card-note" id="route-note" aria-live="polite"></p>
+              </div>
+              <div class="row gap-2">
+                <label class="label" for="goal">Route to</label>
+                <div class="native-select">
+                  <select id="goal"></select>
+                  <svg class="icon" aria-hidden="true"><use href="#i-updown"/></svg>
+                </div>
+              </div>
             </header>
             <div class="table-scroll">
               <table class="table">
@@ -270,7 +281,8 @@
                     <th scope="col">Challenge</th>
                     <th scope="col" class="hide-sm">Category</th>
                     <th class="num" scope="col">Points</th>
-                    <th class="num" scope="col">Solved by</th>
+                    <th class="num" scope="col" title="Your estimated chance: the share of teams that solved it, adjusted for how you do in its category">Odds</th>
+                    <th scope="col" class="hide-sm col-why">Why</th>
                   </tr>
                 </thead>
                 <tbody id="targets-body"></tbody>
@@ -279,8 +291,8 @@
             </div>
           </article>
 
-          <div class="analysis-side">
-            <article class="card">
+          <div class="plan-side">
+            <article class="card ladder-card">
               <header class="card-header">
                 <h2 class="card-title">Path to the top</h2>
               </header>
@@ -292,7 +304,8 @@
                       <th scope="col" id="th-ladder-name">Team</th>
                       <th class="num" scope="col">Gap</th>
                       <th class="num hide-sm" scope="col">Last hour</th>
-                      <th class="num" scope="col" title="Best targets it takes to pass them">Solves to pass</th>
+                      <th class="num" scope="col" title="Solves on the likeliest route past them">To pass</th>
+                      <th class="num hide-sm" scope="col" title="Chance of landing every solve on that route">Odds</th>
                     </tr>
                   </thead>
                   <tbody id="ladder-body"></tbody>
@@ -300,7 +313,7 @@
               </div>
             </article>
 
-            <article class="card">
+            <article class="card focus-card">
               <header class="card-header">
                 <h2 class="card-title">Where to focus</h2>
               </header>
@@ -309,8 +322,10 @@
                   <thead>
                     <tr>
                       <th scope="col">Category</th>
+                      <th class="num" scope="col" title="Challenges of the category you have solved">Solved</th>
                       <th class="num" scope="col">Open</th>
-                      <th class="num" scope="col">Points</th>
+                      <th class="num hide-sm" scope="col">Points</th>
+                      <th class="num" scope="col" title="Open points weighted by your odds">Likely</th>
                     </tr>
                   </thead>
                   <tbody id="focus-body"></tbody>

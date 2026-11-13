@@ -173,8 +173,12 @@ pub struct Rung {
     pub ahead: i64,
     /// Recent pace, when their solves are known.
     pub momentum: Option<Momentum>,
-    /// Best targets it takes to pass them, and the points that brings.
+    /// Solves on the likeliest route past them, and the points that brings.
     pub to_pass: Option<(usize, i64)>,
+    /// That route: challenge IDs, likeliest solve first.
+    pub route: Vec<u64>,
+    /// Chance of landing the whole route.
+    pub route_odds: Option<f64>,
 }
 
 /// Where to spend time to climb: ranked against the whole board.
@@ -184,7 +188,13 @@ pub struct Plan {
     pub ladder: Vec<Rung>,
     pub targets: Vec<analysis::Target>,
     pub focus: Vec<analysis::Focus>,
+    /// Rank of the team to aim for first: the last qualifying place when
+    /// you are outside it, else the team above you.
+    pub goal: Option<i64>,
 }
+
+/// How far back a solve counts as recent, in seconds.
+const RECENT_SECS: i64 = 3600;
 
 /// Teams always on the ladder, from the top.
 const LADDER_TOP: i64 = 3;
@@ -718,10 +728,34 @@ impl BoardModel {
         challenges
     }
 
+    /// Solves per challenge in the last hour, over every account whose
+    /// solves are known (the graphed top, pins, you and the rival).
+    fn recent_solves(&self) -> HashMap<u64, usize> {
+        let mut ids: Vec<u64> = self.data.top.iter().filter_map(|t| t.id).collect();
+        ids.extend(self.data.accounts.keys().copied());
+        ids.sort_unstable();
+        ids.dedup();
+        let mut recent: HashMap<u64, usize> = HashMap::new();
+        for id in ids {
+            let solved: HashSet<u64> = self
+                .changes_for(Some(id))
+                .iter()
+                .flatten()
+                .filter(|c| c.t >= self.now - RECENT_SECS)
+                .filter_map(|c| c.challenge_id)
+                .collect();
+            for challenge in solved {
+                *recent.entry(challenge).or_default() += 1;
+            }
+        }
+        recent
+    }
+
     fn rebuild_plan(
         &mut self,
         challenges: &[Challenge],
         mine: &HashSet<u64>,
+        theirs: &HashSet<u64>,
         top_counts: &HashMap<u64, usize>,
     ) {
         let standings = &self.data.standings;
@@ -740,8 +774,14 @@ impl BoardModel {
             ranked: standings.len(),
             top_n: self.data.top.len().min(self.top_n as usize),
         };
-        let (mut targets, focus) =
-            analysis::targets(challenges, mine, top_counts, field, my_score, &others);
+        let recent = self.recent_solves();
+        let signals = analysis::Signals {
+            recent: &recent,
+            rival: theirs,
+        };
+        let (mut targets, focus) = analysis::targets(
+            challenges, mine, top_counts, field, signals, my_score, &others,
+        );
         // Name who each improving solve overtakes: with the others in rank
         // order, reaching rank r puts you just above the r-th of them.
         let others_ranked: Vec<&crate::models::ScoreboardEntry> = standings
@@ -760,17 +800,24 @@ impl BoardModel {
             }
         }
 
-        let ladder = standings
+        // The last qualifying place, while you are outside it.
+        let line = self
+            .cutoff
+            .map(|n| n as usize)
+            .filter(|&n| n >= 1 && me >= n);
+        let ladder: Vec<Rung> = standings
             .iter()
             .enumerate()
             .filter(|&(i, e)| {
                 i != me
                     && (e.pos <= LADDER_TOP
                         || (i < me && me - i <= LADDER_ABOVE)
-                        || (i > me && i - me <= LADDER_BELOW))
+                        || (i > me && i - me <= LADDER_BELOW)
+                        || line == Some(i + 1))
             })
             .map(|(_, e)| {
                 let ahead = e.score - my_score;
+                let route = analysis::route(&targets, ahead);
                 Rung {
                     pos: e.pos,
                     account: e.account_id,
@@ -778,14 +825,22 @@ impl BoardModel {
                     score: e.score,
                     ahead,
                     momentum: self.momentum(e.account_id),
-                    to_pass: analysis::solves_to_pass(&targets, ahead),
+                    to_pass: route.as_ref().map(|r| (r.picks.len(), r.points)),
+                    route_odds: route.as_ref().map(|r| r.odds),
+                    route: route
+                        .map(|r| r.picks.iter().map(|&i| targets[i].stat.id).collect())
+                        .unwrap_or_default(),
                 }
             })
             .collect();
+        let goal = line
+            .map(|n| standings[n - 1].pos)
+            .or_else(|| me.checked_sub(1).map(|i| standings[i].pos));
         self.plan = Plan {
             ladder,
             targets,
             focus,
+            goal,
         };
     }
 
@@ -824,7 +879,7 @@ impl BoardModel {
 
         let challenges = self.known_challenges();
         let comparison = analysis::compare(&challenges, &mine, &theirs, &top_counts);
-        self.rebuild_plan(&challenges, &mine, &top_counts);
+        self.rebuild_plan(&challenges, &mine, &theirs, &top_counts);
         let standings = &self.data.standings;
 
         let party = |i: usize, solves: Option<usize>| Party {

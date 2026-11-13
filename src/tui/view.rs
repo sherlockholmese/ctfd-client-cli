@@ -1447,8 +1447,8 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
         rows.push(Row::new(vec![
             Cell::from(right(pts(t.stat.value)).style(theme::points())),
             Cell::from(
-                right(format!("{:.0}%", t.share * 100.0))
-                    .style(theme::popularity((t.share * 10.0).round() as usize, 10)),
+                right(format!("{:.0}%", t.odds * 100.0))
+                    .style(theme::popularity((t.odds * 10.0).round() as usize, 10)),
             ),
             Cell::from(Span::styled(
                 fit(&t.stat.category, 11),
@@ -1467,7 +1467,7 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
     let header = header_row(
         vec![
             Cell::from(right("Pts")),
-            Cell::from(right("Solved")),
+            Cell::from(right("Odds")),
             Cell::from("Category"),
             Cell::from("Challenge"),
         ],

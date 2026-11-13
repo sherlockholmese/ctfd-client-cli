@@ -1,4 +1,4 @@
-//! Live scoreboard in the browser (`ctfdc lb --web`).
+//! Live scoreboard in the browser (`ctfdc lb`, the default view).
 //!
 //! Serves a single page plus a small JSON API on a local address.  The
 //! server owns the [`BoardModel`] and does every CTFd request itself, so
@@ -24,6 +24,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use snapshot::Snapshot;
 use std::convert::Infallible;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
@@ -137,14 +138,18 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
 
     let app = router(shared);
     let url = page_url(local, &key);
-    println!("Live scoreboard: {url}");
+    // Written without `println!`: whoever reads the link may close the
+    // pipe right after it, and that must not stop the server.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "Live scoreboard: {url}");
     if !args.bind.is_loopback() {
         eprintln!(
             "Warning: listening on {local}, so other machines on the network can open the \
              scoreboard with the link above."
         );
     }
-    println!("Press Ctrl-C to stop.");
+    let _ = writeln!(out, "Press Ctrl-C to stop.");
+    let _ = out.flush();
     if !args.no_open {
         open_browser(&url);
     }
@@ -353,6 +358,29 @@ async fn set_pin(State(shared): State<Arc<Shared>>, Json(body): Json<PinBody>) -
     StatusCode::NO_CONTENT
 }
 
+/// What opens a URL on other Unix systems.
+const UNIX_OPENER: &str = "xdg-open";
+
+/// Whether a browser on this machine can show the page to whoever ran
+/// ctfdc: not over SSH (the browser would open on the remote machine),
+/// and on Linux and other Unix systems only with a desktop session and
+/// `xdg-open`.
+pub fn browser_available() -> bool {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    let desktop = set("DISPLAY") || set("WAYLAND_DISPLAY");
+    let opener = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join(UNIX_OPENER).is_file())
+    });
+    can_open_browser(
+        set("SSH_CONNECTION") || set("SSH_TTY"),
+        cfg!(any(target_os = "macos", windows)) || (desktop && opener),
+    )
+}
+
+fn can_open_browser(over_ssh: bool, local_opener: bool) -> bool {
+    !over_ssh && local_opener
+}
+
 /// Open `url` in the default browser; failures only print a hint.
 fn open_browser(url: &str) {
     use std::process::{Command, Stdio};
@@ -365,7 +393,7 @@ fn open_browser(url: &str) {
         c.args(["/C", "start", ""]).arg(url);
         c
     } else {
-        let mut c = Command::new("xdg-open");
+        let mut c = Command::new(UNIX_OPENER);
         c.arg(url);
         c
     };
@@ -391,6 +419,13 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn no_browser_over_ssh_or_without_an_opener() {
+        assert!(can_open_browser(false, true));
+        assert!(!can_open_browser(true, true));
+        assert!(!can_open_browser(false, false));
     }
 
     #[test]

@@ -145,6 +145,8 @@ pub struct Plan {
     pub ladder: Vec<Rung>,
     pub targets: Vec<Target>,
     pub focus: Vec<Focus>,
+    /// Rank of the team to aim for first.
+    pub goal: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -156,9 +158,13 @@ pub struct Rung {
     /// Points ahead of you (negative: behind you).
     pub ahead: i64,
     pub momentum: Option<Pace>,
-    /// Best targets needed to pass them.
+    /// Solves on the likeliest route past them, and the points it brings.
     pub solves: Option<usize>,
     pub points: Option<i64>,
+    /// Challenge IDs on that route, likeliest first.
+    pub route: Vec<u64>,
+    /// Chance of landing the whole route (0..=1).
+    pub odds: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -166,7 +172,14 @@ pub struct Target {
     #[serde(flatten)]
     pub challenge: Challenge,
     pub share: f64,
+    /// Your estimated chance of solving it (0..=1).
+    pub odds: f64,
     pub expected: f64,
+    /// Solves in the last hour by accounts whose solves are known.
+    pub recent: usize,
+    /// Why it stands out: `quick_win`, `trending`, `strength`, `rival`
+    /// or `unsolved`.
+    pub reason: Option<&'static str>,
     pub running: i64,
     pub reach: i64,
     /// Name of the best-ranked account this solve takes you past.
@@ -179,6 +192,9 @@ pub struct Focus {
     pub open: usize,
     pub points: i64,
     pub expected: f64,
+    /// Challenges of the category you have solved, and how many it has.
+    pub mine: usize,
+    pub total: usize,
 }
 
 fn pace(m: Option<Momentum>) -> Option<Pace> {
@@ -330,6 +346,8 @@ impl Snapshot {
                     momentum: pace(r.momentum),
                     solves: r.to_pass.map(|(n, _)| n),
                     points: r.to_pass.map(|(_, pts)| pts),
+                    route: r.route.clone(),
+                    odds: r.route_odds,
                 })
                 .collect(),
             targets: p
@@ -338,7 +356,10 @@ impl Snapshot {
                 .map(|t| Target {
                     challenge: challenge(&t.stat),
                     share: t.share,
+                    odds: t.odds,
                     expected: t.expected,
+                    recent: t.recent,
+                    reason: t.reason.map(|r| r.key()),
                     running: t.running,
                     reach: t.reach,
                     passes: t.passes.as_ref().map(|(_, name)| name.clone()),
@@ -352,8 +373,11 @@ impl Snapshot {
                     open: f.open,
                     points: f.points,
                     expected: f.expected,
+                    mine: f.mine,
+                    total: f.total,
                 })
                 .collect(),
+            goal: p.goal,
         };
 
         Snapshot {

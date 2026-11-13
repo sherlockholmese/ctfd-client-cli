@@ -154,7 +154,7 @@ Examples:
     )]
     Submit(SubmitArgs),
 
-    /// Live full-screen scoreboard with a score graph (plain text when piped)
+    /// Live scoreboard in your browser, or the terminal (plain text when piped)
     #[command(
         visible_aliases = ["lb", "scoreboard"],
         after_help = "\
@@ -165,15 +165,19 @@ Examples:
   ctfdc lb --cutoff 10     Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
   ctfdc lb --since '2026-11-07 09:00'
                            Only count points scored from then on (or set since in ctfd.toml)
+  ctfdc lb --tui           Live view in the terminal instead
   ctfdc lb --plain         Print once as text (also used when piped)
   ctfdc lb --demo          Try the live view on fictional data
-  ctfdc lb --web           Open the live scoreboard in your browser
-  ctfdc lb --web --port 8080 --no-open
+  ctfdc lb --port 8080 --no-open
                            Serve on a fixed port without opening a browser
 
-Tab switches between Board (standings, graph, latest solves) and Analysis
-(you vs a rival: gaps, momentum, catch-up targets, categories, your edge).
-Press ? inside for all keys."
+The live scoreboard opens in your browser.  Where no browser can be opened
+(over SSH, or without a desktop) it runs in the terminal instead; --web
+serves the page anyway and prints its link.
+
+Three views: Board (standings, graph, latest solves), Analysis (you vs a
+rival: gaps, momentum, catch-up targets, categories, your edge) and Plan
+(what to solve next).  In the terminal, Tab switches and ? lists all keys."
     )]
     Leaderboard(LeaderboardArgs),
 
@@ -245,26 +249,41 @@ pub struct LeaderboardArgs {
     #[arg(long, conflicts_with = "plain")]
     pub demo: bool,
 
-    /// Serve the live scoreboard as a web page and open it in your browser
+    /// Serve the live scoreboard as a web page even where no browser can
+    /// be opened (the default wherever one can)
     #[arg(short = 'w', long, conflicts_with = "plain")]
     pub web: bool,
 
-    /// Port for `--web` [default: any free port]
-    #[arg(long, value_name = "PORT", default_value_t = 0, requires = "web")]
+    /// Show the live scoreboard in the terminal instead of the browser
+    #[arg(
+        long,
+        visible_alias = "terminal",
+        conflicts_with_all = ["plain", "web", "port", "bind", "no_open"]
+    )]
+    pub tui: bool,
+
+    /// Port for the web page [default: any free port]
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = 0,
+        conflicts_with = "plain"
+    )]
     pub port: u16,
 
-    /// Address for `--web` to listen on (other machines can reach the
-    /// scoreboard unless this is a loopback address)
+    /// Address for the web page to listen on (other machines can reach
+    /// the scoreboard unless this is a loopback address)
     #[arg(
         long,
         value_name = "ADDR",
         default_value = "127.0.0.1",
-        requires = "web"
+        conflicts_with = "plain"
     )]
     pub bind: std::net::IpAddr,
 
-    /// With `--web`, print the address instead of opening a browser
-    #[arg(long, requires = "web")]
+    /// Serve the web page and print its address instead of opening a
+    /// browser
+    #[arg(long, conflicts_with = "plain")]
     pub no_open: bool,
 
     /// Number of top teams drawn in the graph

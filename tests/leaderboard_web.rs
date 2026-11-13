@@ -1,19 +1,34 @@
-//! `ctfdc lb --web`: the browser scoreboard server, against a mocked CTFd.
+//! `ctfdc lb`'s web view: the browser scoreboard server, against a mocked CTFd.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// A running `ctfdc lb --web`, killed on drop.
 struct WebBoard {
     child: Child,
+    /// Kept open: ctfdc keeps printing after the link, and a closed pipe
+    /// would stop it.
+    _stdout: BufReader<ChildStdout>,
     /// `http://127.0.0.1:PORT/`
     base: String,
     key: String,
+}
+
+/// Read the first line ctfdc prints, handing the pipe back still open.
+async fn first_line(stdout: ChildStdout) -> (String, BufReader<ChildStdout>) {
+    tokio::task::spawn_blocking(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        (line, reader)
+    })
+    .await
+    .unwrap()
 }
 
 impl Drop for WebBoard {
@@ -35,14 +50,7 @@ impl WebBoard {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = command.spawn().expect("ctfdc should start");
-        let stdout = child.stdout.take().unwrap();
-        let line = tokio::task::spawn_blocking(move || {
-            let mut line = String::new();
-            BufReader::new(stdout).read_line(&mut line).unwrap();
-            line
-        })
-        .await
-        .unwrap();
+        let (line, stdout) = first_line(child.stdout.take().unwrap()).await;
         let url = line
             .split_whitespace()
             .find(|w| w.starts_with("http://"))
@@ -51,6 +59,7 @@ impl WebBoard {
         let (base, key) = url.split_once("#k=").expect("URL carries the key");
         Self {
             child,
+            _stdout: stdout,
             base: base.to_string(),
             key: key.to_string(),
         }
@@ -281,35 +290,62 @@ async fn since_reranks_the_web_board() {
 }
 
 #[test]
-fn web_options_need_web() {
+fn views_cannot_be_combined() {
+    let lb = |flags: &[&str]| {
+        let mut cmd = Command::cargo_bin("ctfdc").unwrap();
+        cmd.args(["--url", "http://localhost:9", "--token", "t", "lb"])
+            .args(flags);
+        cmd
+    };
+    for flags in [
+        &["--web", "--plain"][..],
+        &["--web", "--tui"],
+        &["--tui", "--plain"],
+        &["--tui", "--port", "8080"],
+        &["--tui", "--no-open"],
+        &["--plain", "--port", "8080"],
+    ] {
+        lb(flags)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+}
+
+#[tokio::test]
+async fn web_options_serve_the_page_without_web() {
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 2).await;
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("ctfdc"))
+        .args(["--url", &server.uri(), "--token", "t"])
+        .args(["lb", "--no-open"])
+        .current_dir(tempfile::tempdir().unwrap().keep())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (line, _stdout) = first_line(child.stdout.take().unwrap()).await;
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        line.starts_with("Live scoreboard: http://127.0.0.1:"),
+        "{line}"
+    );
+}
+
+#[tokio::test]
+async fn piped_output_without_flags_is_text() {
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 2).await;
     Command::cargo_bin("ctfdc")
         .unwrap()
-        .args([
-            "--url",
-            "http://localhost:9",
-            "--token",
-            "t",
-            "lb",
-            "--port",
-            "8080",
-        ])
+        .args(["--url", &server.uri(), "--token", "t", "lb"])
+        .current_dir(tempfile::tempdir().unwrap().keep())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("--web"));
-    Command::cargo_bin("ctfdc")
-        .unwrap()
-        .args([
-            "--url",
-            "http://localhost:9",
-            "--token",
-            "t",
-            "lb",
-            "--web",
-            "--plain",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot be used with"));
+        .success()
+        .stdout(predicate::str::contains("Score"))
+        .stdout(predicate::str::contains("Live scoreboard").not());
 }
 
 #[tokio::test]
