@@ -691,11 +691,62 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
   flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
   display: grid; gap: 8px;
 }
-.facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 24px; }
-.facts > div { display: grid; gap: 0; min-width: 0; align-content: start; }
-.facts > .wide { grid-column: 1 / -1; }
-.facts dt { font-size: 12px; color: var(--muted-foreground); }
-.facts dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.signals-head { justify-content: space-between; gap: 16px; }
+.viz { display: grid; gap: 12px 32px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.viz-block { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.viz-wide { grid-column: 1 / -1; }
+.viz-label { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted-foreground); }
+.viz-label b { font-weight: 500; color: var(--foreground); font-variant-numeric: tabular-nums; }
+.viz-none { font-size: 13px; color: var(--muted-foreground); }
+
+/* Difficulty as four steps. */
+.level { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; flex: none; }
+.pips { display: inline-flex; gap: 3px; }
+.pips i { width: 14px; height: 6px; border-radius: 2px; background: var(--muted); }
+.pips i.on { background: var(--foreground); }
+.level[data-tagged="false"] .pips i.on { background: var(--muted-foreground); }
+
+/* Solves over the CTF: a line from the start to now, a dot per solve, and
+   the last hour shaded. */
+.timeline { position: relative; height: 34px; }
+.timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 22px; border-top: 1px solid var(--border); }
+.timeline-recent {
+  position: absolute; top: 12px; height: 20px; right: 0; border-radius: 4px;
+  background: var(--muted); border-left: 1px dashed var(--muted-foreground);
+}
+.timeline-dot {
+  position: absolute; top: 18px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%;
+  background: var(--foreground); box-shadow: 0 0 0 2px var(--card);
+}
+.timeline-dot.first { background: var(--success); }
+.timeline-tag {
+  position: absolute; top: 0; font-size: 12px; line-height: 14px; white-space: nowrap;
+  color: var(--foreground); max-width: 60%; overflow: hidden; text-overflow: ellipsis;
+}
+.timeline-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted-foreground); }
+
+/* A share of a whole: a filled track, or one pip per team when few. */
+.meters { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 13px; }
+.meters .muted { font-size: 12px; }
+.meters .num { text-align: right; }
+.bar { position: relative; height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; }
+.bar > i { position: absolute; inset: 0 auto 0 0; background: var(--foreground); border-radius: 3px; }
+.bar > i.quiet { background: var(--muted-foreground); }
+
+/* A value with its plausible range: a band and a mark on a 0 to 100 track. */
+.range { position: relative; height: 16px; }
+.range::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 6px; border-radius: 3px; background: var(--muted); }
+.range-band { position: absolute; top: 5px; height: 6px; border-radius: 3px; background: var(--muted-foreground); opacity: 0.55; }
+.range-mark { position: absolute; top: 1px; width: 3px; height: 14px; margin-left: -1.5px; border-radius: 2px; background: var(--foreground); }
+
+/* How long it took the others (line: shortest to longest, box: the middle
+   half, tick: the median) and where your time falls. */
+.spans { position: relative; height: 30px; }
+.spans-line { position: absolute; top: 8px; height: 0; border-top: 1.5px solid var(--muted-foreground); }
+.spans-box { position: absolute; top: 3px; height: 11px; border-radius: 3px; background: var(--muted); border: 1px solid var(--muted-foreground); }
+.spans-median { position: absolute; top: 1px; width: 2px; height: 15px; margin-left: -1px; background: var(--foreground); }
+.spans-you { position: absolute; top: 18px; margin-left: -5px; border: 5px solid transparent; border-top: 0; border-bottom: 8px solid var(--foreground); }
+.spans-you.guess { border-bottom-color: var(--muted-foreground); }
 
 /* A solve on the route to the goal: a rail, a step number, full weight. */
 tr.on-route td:first-child { box-shadow: inset 2px 0 0 var(--foreground); }
@@ -802,7 +853,7 @@ kbd {
   #plan-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
   .targets-card .table-scroll { min-height: 0; }
   /* The details never crowd out the list: they scroll past a third. */
-  .signals { max-height: 38%; overflow-y: auto; overscroll-behavior: contain; }
+  .signals { max-height: 42%; overflow-y: auto; overscroll-behavior: contain; }
   .ladder { flex: none; }
   .focus { flex: 1; }
 }
@@ -834,6 +885,9 @@ kbd {
 }
 @container (max-width: 400px) {
   .col-time { display: none; }
+}
+@container (max-width: 620px) {
+  .viz { grid-template-columns: minmax(0, 1fr); }
 }
 @container (max-width: 780px) {
   .col-why { display: none; }
@@ -879,7 +933,7 @@ kbd {
   *, *::before, *::after { transition-duration: 0ms !important; animation: none !important; }
 }
 @media (forced-colors: active) {
-  .swatch, .pop-bar > i { forced-color-adjust: none; }
+  .swatch, .pop-bar > i, .bar > i, .pips i, .timeline-dot, .range-mark, .range-band, .spans-median { forced-color-adjust: none; }
   tr.on-route td:first-child { box-shadow: none; border-left: 2px solid CanvasText; }
   button.rung[aria-checked="true"] .radio::after { background: CanvasText; }
 }

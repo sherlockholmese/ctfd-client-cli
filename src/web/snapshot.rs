@@ -224,12 +224,48 @@ pub struct Target {
     pub time_guessed: bool,
     /// Likely points per hour of that time.
     pub per_hour: Option<f64>,
-    /// Everything known about it, as labelled lines.
+    /// Everything known about it, as labelled lines (the text behind the
+    /// drawn details).
     pub facts: Vec<Fact>,
+    /// The same as numbers, for drawing.
+    pub stats: Stats,
     pub running: i64,
     pub reach: i64,
     /// Name of the best-ranked account this solve takes you past.
     pub passes: Option<String>,
+}
+
+/// One target's signals as numbers.  Times are seconds; `*_text` are the
+/// same in words.
+#[derive(Serialize)]
+pub struct Stats {
+    /// Seconds from the start of scoring to now.
+    pub elapsed: i64,
+    /// Each tracked solve: seconds into the CTF, who, and that in words.
+    pub solves: Vec<(i64, String, String)>,
+    pub latest_text: Option<String>,
+    pub last_hour: usize,
+    pub last_3h: usize,
+    /// `[solved, out of]` over the field, the graphed top, and the
+    /// tracked teams ahead of you.
+    pub field: Option<(u64, usize)>,
+    pub top: (usize, usize),
+    pub ahead: (usize, usize),
+    pub odds_low: f64,
+    pub odds_high: f64,
+    /// What it took the tracked teams: shortest, lower quartile, median,
+    /// upper quartile, longest.
+    pub spans: Option<[i64; 5]>,
+    pub samples: usize,
+    pub typical_text: Option<String>,
+    /// Your time.
+    pub time: Option<i64>,
+    /// `[solved by you, challenges]` in its category, and the field's
+    /// average solve share there.
+    pub category: (usize, usize),
+    pub category_share: f64,
+    /// 0 (easy) to 3 (extreme).
+    pub level: u8,
 }
 
 #[derive(Serialize)]
@@ -291,6 +327,53 @@ fn category(c: &CategoryRow) -> Category {
         mine_points: c.mine_points,
         theirs: c.theirs,
         theirs_points: c.theirs_points,
+    }
+}
+
+fn stats(t: &analysis::Target, plan: &crate::board::model::Plan, now: i64) -> Stats {
+    let (field, start, ahead_tracked) = plan.context().unwrap_or((
+        analysis::Field {
+            ranked: 0,
+            top_n: 0,
+        },
+        now,
+        0,
+    ));
+    let timing = &t.timing;
+    let spans = timing
+        .extent()
+        .zip(timing.typical())
+        .map(|((min, max), median)| {
+            let (q1, q3) = timing.spread().unwrap_or((min, max));
+            [min, q1, median, q3, max]
+        });
+    Stats {
+        elapsed: (now - start).max(1),
+        solves: timing
+            .times
+            .iter()
+            .zip(&timing.solvers)
+            .map(|(&at, who)| (at - start, who.clone(), analysis::span_text(at - start)))
+            .collect(),
+        latest_text: timing.last().map(|at| analysis::span_text(now - at)),
+        last_hour: timing.recent(now, 3600),
+        last_3h: timing.recent(now, 3 * 3600),
+        field: t
+            .stat
+            .solves
+            .filter(|_| field.ranked > 0)
+            .map(|n| (n, field.ranked)),
+        top: (t.stat.top_solves, field.top_n),
+        ahead: (t.ahead, ahead_tracked),
+        odds_low: t.odds_range.0,
+        odds_high: t.odds_range.1,
+        spans,
+        samples: timing.spans.len(),
+        typical_text: timing.typical().map(analysis::span_text),
+        time: t.time,
+        category: t.category_record,
+        category_share: t.category_share,
+        level: t.difficulty.level as u8,
     }
 }
 
@@ -417,6 +500,7 @@ impl Snapshot {
                     time: t.time.map(analysis::span_text),
                     time_guessed: t.time_guessed,
                     per_hour: t.per_hour,
+                    stats: stats(t, p, model.now),
                     facts: p
                         .facts(t, model.now)
                         .into_iter()

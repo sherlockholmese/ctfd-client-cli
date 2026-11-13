@@ -1067,6 +1067,95 @@
     return plan.ladder.find((r) => r.pos === plan.goal) ?? null;
   }
 
+  // The picked target's signals, drawn.  Every number shown here is also
+  // in the list of facts that follows the drawings for screen readers.
+  const span = (secs) => {
+    const s = Math.max(0, Math.round(secs));
+    if (s < 60) return "under 1m";
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+    return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  };
+  const left = (fraction) => `left:${(Math.min(1, Math.max(0, fraction)) * 100).toFixed(2)}%`;
+
+  function drawStats(t) {
+    const s = state.snap;
+    const st = t.stats;
+    const block = (label, value, ...body) =>
+      el("div", { class: "viz-block" }, el("div", { class: "viz-label" }, el("span", { text: label }), value ? el("b", { text: value }) : null), ...body);
+
+    // When the tracked teams solved it, from the start of the CTF to now.
+    const line = el("div", { class: "timeline" });
+    const hour = Math.min(1, 3600 / st.elapsed);
+    line.append(el("div", { class: "timeline-recent", style: `width:${(hour * 100).toFixed(2)}%`, title: "The last hour" }));
+    st.solves.forEach(([at, who, text], i) => {
+      line.append(el("div", { class: `timeline-dot${i === 0 ? " first" : ""}`, style: left(at / st.elapsed), title: `${who}, ${text} in` }));
+    });
+    if (st.solves.length) {
+      const [at, who, text] = st.solves[0];
+      const f = at / st.elapsed;
+      line.append(el("div", { class: "timeline-tag", style: f > 0.5 ? `right:${((1 - f) * 100).toFixed(2)}%` : left(f), text: `First: ${who}, ${text} in` }));
+    }
+    const count = st.solves.length;
+    const pulse = count ? `${count} tracked ${count === 1 ? "solve" : "solves"}, ${st.last_hour} in the last hour, ${st.last_3h} in the last 3` : "No tracked team has solved it";
+    const timeline = el(
+      "div",
+      { class: "viz-block viz-wide" },
+      el("div", { class: "viz-label" }, el("span", { text: "Solves over the CTF" }), el("b", { text: pulse })),
+      line,
+      el("div", { class: "timeline-axis" }, el("span", { text: "Start" }), el("span", { text: st.latest_text ? `Latest ${st.latest_text} ago` : "" }), el("span", { text: `Now, ${span(st.elapsed)} in` })),
+    );
+
+    // How widely it is solved.
+    const meter = (label, n, of, quiet) => [
+      el("span", { class: "muted", text: label }),
+      el("div", { class: "bar" }, el("i", { class: quiet ? "quiet" : null, style: `width:${of ? Math.round((n / of) * 100) : 0}%` })),
+      el("span", { class: "num tabular", text: `${num(n)}/${num(of)}` }),
+    ];
+    const reach = el("div", { class: "meters" });
+    if (st.field) reach.append(...meter(`All ${s.noun}s`, st.field[0], st.field[1]));
+    if (st.top[1]) reach.append(...meter(`Top ${st.top[1]}`, st.top[0], st.top[1]));
+    if (st.ahead[1]) reach.append(...meter("Ahead of you", st.ahead[0], st.ahead[1]));
+
+    // Your odds, with the range they plausibly lie in.
+    const odds = el(
+      "div",
+      { class: "range", title: `Likely ${pct(st.odds_low)} to ${pct(st.odds_high)}` },
+      el("div", { class: "range-band", style: `${left(st.odds_low)};width:${(Math.max(0.01, st.odds_high - st.odds_low) * 100).toFixed(2)}%` }),
+      el("div", { class: "range-mark", style: left(t.odds) }),
+    );
+    const record = el("div", { class: "meters" });
+    record.append(...meter("You", t.stats.category[0], t.stats.category[1]));
+    record.append(el("span", { class: "muted", text: "Field" }), el("div", { class: "bar" }, el("i", { class: "quiet", style: `width:${Math.round(st.category_share * 100)}%` })), el("span", { class: "num tabular", text: pct(st.category_share) }));
+
+    // How long it took the others, and where your time falls.
+    let time;
+    if (st.spans || st.time !== null) {
+      const top = Math.max(st.spans ? st.spans[4] : 0, st.time ?? 0) * 1.08 || 1;
+      const box = el("div", { class: "spans" });
+      if (st.spans) {
+        const [min, q1, median, q3, max] = st.spans;
+        box.append(
+          el("div", { class: "spans-line", style: `${left(min / top)};width:${(((max - min) / top) * 100).toFixed(2)}%`, title: `Shortest ${span(min)}, longest ${span(max)}` }),
+          el("div", { class: "spans-box", style: `${left(q1 / top)};width:${(Math.max(0.01, (q3 - q1) / top) * 100).toFixed(2)}%`, title: `Half took ${span(q1)} to ${span(q3)}` }),
+          el("div", { class: "spans-median", style: left(median / top), title: `Typically ${span(median)}` }),
+        );
+      }
+      if (st.time !== null) box.append(el("div", { class: `spans-you${t.time_guessed ? " guess" : ""}`, style: left(st.time / top), title: t.time_guessed ? "Your time, guessed from its difficulty" : "Your time, at your pace" }));
+      const value = [st.typical_text ? `${st.typical_text} typical` : null, t.time ? `you ${t.time_guessed ? "~" : ""}${t.time}` : null].filter(Boolean).join(", ");
+      time = block(st.spans ? "Time taken" : "Time, from difficulty", value, box, el("div", { class: "timeline-axis" }, el("span", { text: "0" }), el("span", { text: span(top) })));
+    } else {
+      time = block("Time taken", null, el("p", { class: "viz-none", text: "No solve times yet" }));
+    }
+
+    return [
+      timeline,
+      block("Solved by", null, reach),
+      block("Your odds", `${pct(t.odds)}, likely ${pct(st.odds_low)} to ${pct(st.odds_high)}`, odds, el("div", { class: "viz-label" }, el("span", { text: `Your ${t.category || "category"} against the field` })), record),
+      time,
+    ];
+  }
+
   function pickTarget(id) {
     state.target = id;
     renderPlan();
@@ -1244,7 +1333,15 @@
     $("signals").hidden = !picked;
     if (picked) {
       $("signals-title").textContent = picked.name;
-      replace($("facts"), picked.facts.map((f) => el("div", { class: f.wide ? "wide" : null }, el("dt", { text: f.label }), el("dd", { text: f.value }))));
+      const level = $("signals-level");
+      level.dataset.tagged = String(picked.difficulty_tagged);
+      level.title = picked.difficulty_tagged ? "Tagged by the organisers" : "Estimated from solves and points";
+      replace(level, [
+        el("span", { class: "pips", "aria-hidden": "true" }, ...[0, 1, 2, 3].map((i) => el("i", { class: i <= picked.stats.level ? "on" : null }))),
+        el("span", { text: picked.difficulty_tagged ? picked.difficulty_label : `${picked.difficulty_label}, estimated` }),
+      ]);
+      replace($("viz"), drawStats(picked));
+      replace($("facts"), picked.facts.map((f) => el("div", null, el("dt", { text: f.label }), el("dd", { text: f.value }))));
     }
     $("targets-empty").hidden = targets.length > 0;
     $("targets-empty").textContent = s.h2h.categories.length ? "Nothing left" : "Challenges aren't visible yet";

@@ -309,6 +309,11 @@ impl Timing {
         quantile(&self.spans, 0.5)
     }
 
+    /// The shortest and longest span.
+    pub fn extent(&self) -> Option<(i64, i64)> {
+        Some((*self.spans.iter().min()?, *self.spans.iter().max()?))
+    }
+
     /// The middle half of the spans: (lower quartile, upper quartile).
     pub fn spread(&self) -> Option<(i64, i64)> {
         if self.spans.len() < 3 {

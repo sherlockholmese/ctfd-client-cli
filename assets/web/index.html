@@ -331,9 +331,14 @@
             <p class="empty" id="targets-empty" hidden></p>
           </div>
           <!-- Everything known about the picked target. -->
-          <section class="signals" id="signals" aria-live="polite" aria-labelledby="signals-title">
-            <h3 class="card-title" id="signals-title"></h3>
-            <dl class="facts" id="facts"></dl>
+          <section class="signals" id="signals" aria-labelledby="signals-title">
+            <header class="row signals-head">
+              <h3 class="card-title" id="signals-title"></h3>
+              <span class="level" id="signals-level"></span>
+            </header>
+            <!-- The drawings; the list after them says the same in words. -->
+            <div class="viz" id="viz" aria-hidden="true"></div>
+            <dl class="sr-only" id="facts"></dl>
           </section>
         </article>
       </div>

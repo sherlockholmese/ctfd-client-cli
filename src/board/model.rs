@@ -275,6 +275,11 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// What the details of one target draw from, beyond the target itself.
+    pub fn context(&self) -> Option<(analysis::Field, i64, usize)> {
+        Some((self.field?, self.start, self.ahead_tracked))
+    }
+
     /// The details of one target, as labelled lines.
     pub fn facts(&self, target: &analysis::Target, now: i64) -> Vec<analysis::Fact> {
         match self.field {
