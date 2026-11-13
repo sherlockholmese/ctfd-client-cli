@@ -1208,7 +1208,7 @@
           el("td", { class: "col-name" }, el("span", { class: "chal-name", text: f.category || "Uncategorized" })),
           el("td", { class: "num muted", text: `${f.mine}/${f.total}` }),
           el("td", { class: "num", text: num(f.open) }),
-          el("td", { class: "num", text: num(f.points) }),
+          el("td", { class: "num hide-sm", text: num(f.points) }),
           el("td", { class: "num" }, el("span", { class: "likely" }, el("span", { text: num(Math.round(f.expected)) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round((f.expected / most) * 100)}%` })))),
         ),
       ),
