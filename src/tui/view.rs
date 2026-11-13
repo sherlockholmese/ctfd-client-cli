@@ -1450,7 +1450,7 @@ fn solved_in(at: Option<i64>, start: i64) -> String {
 /// Width of the Plan rail: the ladder with its marker.
 const PLAN_SIDE: u16 = 58;
 /// Lines given to the highlighted target's details.
-const FACT_ROWS: u16 = 9;
+const FACT_ROWS: u16 = 7;
 /// Width of the "Why" column.
 const WHY_WIDTH: u16 = 19;
 
@@ -1667,9 +1667,9 @@ fn cell_at(fraction: f64, width: usize) -> usize {
     ((fraction.clamp(0.0, 1.0) * (width - 1) as f64).round() as usize).min(width - 1)
 }
 
-/// Everything known about the highlighted target, drawn: when it was
-/// solved across the CTF, how widely, your odds with their range, and how
-/// long it took the others against your time.
+/// Everything known about the highlighted target, drawn: a timeline of
+/// its solves, then one small block each for how widely it is solved, your
+/// odds, the time it takes, and who solved it when.
 fn render_facts(f: &mut Frame, area: Rect, app: &App) {
     use crate::board::analysis::span_text;
     let plan = &app.board.plan;
@@ -1680,16 +1680,44 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
     let Some((field, start, ahead_tracked)) = plan.context() else {
         return;
     };
-    let inner = titled(f, area, &fit(&t.stat.name, area.width as usize));
     let now = app.board.now;
-    const LABEL: usize = 8;
-    let track = ((inner.width as usize).saturating_sub(LABEL) / 2).clamp(16, 40);
-    let label = |text: &str| Span::styled(format!("{text:<LABEL$}"), theme::muted());
     let quiet = |text: String| Span::styled(text, theme::muted());
-    let mut lines: Vec<Line> = Vec::new();
+    let [title, timeline, _, blocks] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+
+    // The name, with the difficulty as four steps beside it.
+    let level = t.difficulty.level as usize;
+    f.render_widget(
+        Line::from(vec![
+            Span::styled(fit(&t.stat.name, 40), theme::heading()),
+            Span::raw(format!(
+                "   {}{} ",
+                "■".repeat(level + 1),
+                "□".repeat(3 - level)
+            )),
+            quiet(format!(
+                "{}{}",
+                t.difficulty.level.label(),
+                if t.difficulty.tagged {
+                    ""
+                } else {
+                    ", estimated"
+                }
+            )),
+        ])
+        .centered(),
+        title,
+    );
 
     // Solves over the CTF: a mark per tracked solve from the start to now,
     // the last hour drawn dotted.
+    // The words beside the track need about 62 cells.
+    let track = (area.width as usize).saturating_sub(62).clamp(12, 44);
     let elapsed = (now - start).max(1) as f64;
     let mut cells: Vec<char> = (0..track)
         .map(|i| {
@@ -1703,64 +1731,109 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
     for &at in &t.timing.times {
         cells[cell_at((at - start) as f64 / elapsed, track)] = '●';
     }
-    let solves_note = match (t.timing.first(), t.timing.last()) {
+    let summary = match (t.timing.first(), t.timing.last()) {
         (Some(first), Some(last)) => format!(
-            "  {} tracked, first {} in, latest {} ago",
+            "   {} solves   first {} in   latest {} ago",
             t.timing.times.len(),
             span_text(first - start),
             span_text(now - last)
         ),
-        _ => "  no tracked team has solved it".into(),
+        _ => "   no tracked team has solved it".into(),
     };
-    lines.push(Line::from(vec![
-        label("Solves"),
-        Span::raw(cells.into_iter().collect::<String>()),
-        quiet(solves_note),
-    ]));
-
-    // How widely it is solved.
-    let third = (track / 3).max(6);
-    let mut reach = vec![label("Solved")];
-    let mut share = |name: &str, n: usize, of: usize| {
-        if of > 0 {
-            reach.push(quiet(format!("{name} ")));
-            reach.push(Span::raw(meter(n as f64, of as f64, third)));
-            reach.push(Span::raw(format!(" {n}/{of}   ")));
-        }
-    };
-    if let Some(n) = t.stat.solves {
-        share("all", n as usize, field.ranked);
-    }
-    share(
-        &format!("top {}", field.top_n),
-        t.stat.top_solves,
-        field.top_n,
+    f.render_widget(
+        Line::from(vec![
+            quiet("start ".into()),
+            Span::raw(cells.into_iter().collect::<String>()),
+            quiet(" now".into()),
+            quiet(summary),
+        ])
+        .centered(),
+        timeline,
     );
-    share("ahead", t.ahead, ahead_tracked);
-    lines.push(Line::from(reach));
 
-    // Your odds: the range they plausibly lie in, and the estimate.
+    // Four blocks side by side, each a quiet heading over three lines.
+    const BAR: usize = 10;
+    let block = |heading: &str, rows: Vec<Line<'static>>| {
+        let mut lines = vec![Line::styled(heading.to_string(), theme::muted())];
+        lines.extend(rows);
+        Paragraph::new(lines)
+    };
+    let [reach_area, odds_area, time_area, who_area] = Layout::horizontal([
+        Constraint::Length(23),
+        Constraint::Length(24),
+        Constraint::Length(23),
+        Constraint::Min(0),
+    ])
+    .spacing(3)
+    .areas(blocks);
+    // The last block only where there is room for a name and a time.
+    let who = who_area.width >= 18;
+
+    let share = |name: &str, n: usize, of: usize| {
+        Line::from(vec![
+            quiet(format!("{name:<7}")),
+            Span::raw(meter(n as f64, of as f64, BAR)),
+            Span::raw(format!(" {n}/{of}")),
+        ])
+    };
+    let mut reach = Vec::new();
+    if let Some(n) = t.stat.solves.filter(|_| field.ranked > 0) {
+        reach.push(share("all", n as usize, field.ranked));
+    }
+    if field.top_n > 0 {
+        reach.push(share(
+            &format!("top {}", field.top_n),
+            t.stat.top_solves,
+            field.top_n,
+        ));
+    }
+    if ahead_tracked > 0 {
+        reach.push(share("ahead", t.ahead, ahead_tracked));
+    }
+    f.render_widget(block("Solved by", reach), reach_area);
+
+    // Your odds: the estimate inside the range it plausibly lies in.
+    const ODDS: usize = 16;
     let (low, high) = t.odds_range;
-    let mut cells = vec!['░'; track];
-    for cell in &mut cells[cell_at(low, track)..=cell_at(high, track)] {
+    let mut cells = vec!['░'; ODDS];
+    for cell in &mut cells[cell_at(low, ODDS)..=cell_at(high, ODDS)] {
         *cell = '▒';
     }
-    cells[cell_at(t.odds, track)] = '█';
-    lines.push(Line::from(vec![
-        label("Odds"),
-        Span::raw(cells.into_iter().collect::<String>()),
-        Span::raw(format!("  {}", percent(t.odds))),
-        quiet(format!(", likely {} to {}", percent(low), percent(high))),
-    ]));
+    cells[cell_at(t.odds, ODDS)] = '█';
+    let (mine, total) = t.category_record;
+    f.render_widget(
+        block(
+            "Your odds",
+            vec![
+                Line::from(vec![
+                    Span::raw(cells.into_iter().collect::<String>()),
+                    Span::raw(format!(" {}", percent(t.odds))),
+                ]),
+                Line::from(quiet(format!(
+                    "likely {} to {}",
+                    percent(low),
+                    percent(high)
+                ))),
+                Line::from(quiet(format!(
+                    "{}: you {mine}/{total}, field {}",
+                    fit(&t.stat.category, 8),
+                    percent(t.category_share)
+                ))),
+            ],
+        ),
+        odds_area,
+    );
 
     // Time: shortest to longest as a line, the middle half as a box, the
-    // median as a bar, and your time as an arrow.
+    // median as a bar, and your time as an arrow under it.
+    const TIME: usize = 22;
+    let mut time_rows = Vec::new();
     if let Some(you) = t.time {
         let spans = t.timing.extent().zip(t.timing.typical());
         let top = spans.map_or(0, |((_, max), _)| max).max(you) as f64 * 1.08;
-        let at = |secs: i64| cell_at(secs as f64 / top.max(1.0), track);
-        let mut cells = vec![' '; track];
-        let mut note = String::new();
+        let at = |secs: i64| cell_at(secs as f64 / top.max(1.0), TIME);
+        let mut cells = vec![' '; TIME];
+        let mut typical = "no solve times yet".to_string();
         if let Some(((min, max), median)) = spans {
             for cell in &mut cells[at(min)..=at(max)] {
                 *cell = '─';
@@ -1771,59 +1844,48 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
                 }
             }
             cells[at(median)] = '┃';
-            note = format!(
-                "{} typical ({} to {}), ",
-                span_text(median),
-                span_text(min),
-                span_text(max)
-            );
+            typical = format!("typically {}", span_text(median));
         }
-        cells[at(you)] = '▲';
-        lines.push(Line::from(vec![
-            label("Time"),
-            Span::raw(cells.into_iter().collect::<String>()),
-            quiet(format!("  {note}")),
+        let mut arrow = vec![' '; TIME];
+        arrow[at(you)] = '▲';
+        time_rows.push(Line::raw(cells.into_iter().collect::<String>()));
+        time_rows.push(Line::raw(arrow.into_iter().collect::<String>()));
+        time_rows.push(Line::from(vec![
+            quiet(format!("{typical}, ")),
             Span::raw(format!(
-                "▲ you {}{}",
+                "you {}{}",
                 if t.time_guessed { "~" } else { "" },
                 span_text(you)
             )),
         ]));
+    } else {
+        time_rows.push(Line::from(quiet("no solve times yet".into())));
     }
-
-    // Your record in the category against the field's, and the difficulty.
-    let (mine, total) = t.category_record;
-    let level = t.difficulty.level as usize;
-    lines.push(Line::from(vec![
-        label(&fit(&t.stat.category, LABEL - 1)),
-        quiet("you ".into()),
-        Span::raw(meter(mine as f64, total as f64, third)),
-        Span::raw(format!(" {mine}/{total}   ")),
-        quiet("field ".into()),
-        Span::raw(meter(t.category_share, 1.0, third)),
-        Span::raw(format!(" {}   ", percent(t.category_share))),
-        quiet("level ".into()),
-        Span::raw(format!(
-            "{}{} ",
-            "■".repeat(level + 1),
-            "□".repeat(3 - level)
-        )),
-        Span::raw(t.difficulty.level.label()),
-        quiet(
-            if t.difficulty.tagged {
-                ", tagged"
-            } else {
-                ", estimated"
-            }
-            .into(),
-        ),
-    ]));
+    f.render_widget(block("Time taken", time_rows), time_area);
 
     // Who solved it how far in: the names the timeline cannot carry.
-    if let Some(fact) = plan.facts(t, now).into_iter().find(|fact| fact.wide) {
-        lines.push(Line::from(vec![label("Who"), Span::raw(fact.value)]));
+    if who && !t.timing.times.is_empty() {
+        const SHOWN: usize = 3;
+        let count = t.timing.times.len();
+        let named = if count > SHOWN { SHOWN - 1 } else { count };
+        let mut rows: Vec<Line> = t
+            .timing
+            .solvers
+            .iter()
+            .zip(&t.timing.times)
+            .take(named)
+            .map(|(name, &at)| {
+                Line::from(vec![
+                    Span::raw(format!("{:<12}", fit(name, 11))),
+                    quiet(span_text(at - start)),
+                ])
+            })
+            .collect();
+        if count > named {
+            rows.push(Line::from(quiet(format!("and {} more", count - named))));
+        }
+        f.render_widget(block("Solved at", rows), who_area);
     }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 /// The teams to pass, with the one the route aims at marked.
