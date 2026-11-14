@@ -1547,32 +1547,64 @@
     const picked = list.find((c) => c.id === state.challenge) ?? list[0] ?? null;
     state.challenge = picked ? picked.id : null;
     const solved = s.challenges.filter((c) => c.solved).length;
-    $("chal-title").textContent = `Challenges, ${solved} of ${s.challenges.length} solved`;
+    $("chal-count").textContent = `${solved} of ${s.challenges.length} solved`;
     $("chal-unsolved").setAttribute("aria-pressed", state.unsolvedOnly);
 
-    const stateCell = (c) =>
+    // One mark per row: solved, or downloaded to the workspace.
+    const mark = (c) =>
       c.solved
-        ? el("span", { class: "state solved" }, icon("check"), "Solved")
+        ? el("span", { class: "mark solved", title: "Solved" }, icon("check"), el("span", { class: "sr-only", text: "Solved" }))
         : c.on_disk
-          ? el("span", { class: "state", title: "Downloaded to your workspace" }, icon("download"), "On disk")
+          ? el("span", { class: "mark", title: "Downloaded to your workspace" }, icon("download"), el("span", { class: "sr-only", text: "Downloaded" }))
           : null;
-    const refocus = $("chal-rows").contains(document.activeElement);
-    replace(
-      $("chal-rows"),
-      list.map((c) => {
-        const on = picked && c.id === picked.id;
-        return el(
-          "tr",
-          { class: [on ? "is-picked" : "", c.solved ? "is-solved" : ""].join(" ").trim() || null, onclick: () => pickChallenge(c.id) },
-          el("td", { class: "col-name" }, el("button", { class: "pick chal-name", type: "button", "aria-pressed": on ? "true" : "false", text: c.name, title: c.name })),
-          el("td", { class: "hide-sm col-cat cat", text: c.category }),
-          el("td", { class: "num", text: num(c.value) }),
-          el("td", { class: "num hide-sm col-extra muted", text: c.solves === null ? "" : num(c.solves) }),
-          el("td", { class: "col-state" }, stateCell(c)),
-        );
-      }),
-    );
-    if (refocus) $("chal-rows").querySelector('.pick[aria-pressed="true"]')?.focus();
+    // Grouped by category; each heading counts the whole category, not
+    // just the rows the filters leave.
+    const groups = [];
+    for (const c of list) {
+      const last = groups[groups.length - 1];
+      if (last && last.name === c.category) last.rows.push(c);
+      else groups.push({ name: c.category, rows: [c] });
+    }
+    const table = $("chal-rows");
+    const refocus = table.contains(document.activeElement);
+    for (const body of [...table.tBodies]) body.remove();
+    for (const g of groups) {
+      const all = s.challenges.filter((c) => c.category === g.name);
+      const done = all.filter((c) => c.solved).length;
+      table.append(
+        el(
+          "tbody",
+          null,
+          el(
+            "tr",
+            { class: "group-head" },
+            el(
+              "th",
+              { class: "group", colspan: 4, scope: "rowgroup" },
+              el(
+                "div",
+                { class: "group-row" },
+                el("span", { text: g.name || "Uncategorized" }),
+                el("div", { class: "bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round((done / all.length) * 100)}%` })),
+                el("span", { class: "tabular", text: `${done}/${all.length}`, title: `${done} of ${all.length} solved` }),
+              ),
+            ),
+          ),
+          ...g.rows.map((c) => {
+            const on = picked && c.id === picked.id;
+            return el(
+              "tr",
+              { class: [on ? "is-picked" : "", c.solved ? "is-solved" : ""].join(" ").trim() || null, onclick: () => pickChallenge(c.id) },
+              el("td", { class: "col-mark" }, mark(c)),
+              el("td", { class: "col-name" }, el("button", { class: "pick chal-name", type: "button", "aria-pressed": on ? "true" : "false", text: c.name, title: c.name })),
+              el("td", { class: "num muted", text: c.solves === null ? "" : num(c.solves) }),
+              el("td", { class: "num", text: num(c.value) }),
+            );
+          }),
+        ),
+      );
+    }
+    if (refocus) table.querySelector('.pick[aria-pressed="true"]')?.focus();
     $("chal-none").hidden = list.length > 0;
     $("chal-none").textContent = state.unsolvedOnly && !$("chal-search").value ? "Everything is solved" : "No match";
 

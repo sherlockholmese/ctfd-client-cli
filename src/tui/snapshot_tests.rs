@@ -494,9 +494,11 @@ fn challenges_tab_lists_opens_filters_and_takes_flags() {
     assert_eq!(app.view, View::Challenges);
     let t = text(&draw(&mut app, 160, 44));
     for needle in [
-        "Challenges (20 of 30 solved)",
+        "Challenges, 20 of 30 solved",
+        "Crypto",
+        "4/5",
+        "✓",
         "Caesar Salad",
-        "solved",
         "Loading",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");

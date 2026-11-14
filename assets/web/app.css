@@ -763,19 +763,41 @@ tr.on-route .chal-name { font-weight: 600; }
 
 /* ----------------------------------------------------------- challenges */
 
-/* The list beside the picked challenge: what it says, how to reach it,
-   and the flag field under it. */
+/* A rail to pick a challenge from, as on Analysis and Plan, and beside it
+   the challenge: what it says, how to reach it, and the flag field. */
 #chal-body {
   display: grid; gap: var(--gap); min-width: 0;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: clamp(360px, 32vw, 460px) minmax(0, 1fr);
   align-items: start;
 }
-.chal-list { container-type: inline-size; }
-.chal-list .table-scroll { max-height: 560px; }
-.col-state { width: 1%; }
-.state { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted-foreground); white-space: nowrap; }
-.state.solved { color: var(--success); }
-.state .icon { width: 14px; height: 14px; }
+.chal-list { padding-top: 16px; gap: 12px; }
+.chal-list .rail-head { align-items: baseline; }
+.chal-tools { padding: 0 var(--inset); }
+.chal-tools .input-wrap { flex: 1; min-width: 0; }
+.chal-tools .input { width: 100%; }
+.chal-list .table-scroll { margin-top: 0; max-height: 560px; }
+
+/* Grouped by category: a heading with how much of it is solved, then its
+   challenges.  One quiet mark says solved or downloaded. */
+.chal-table .col-mark { width: 36px; padding-right: 0; }
+.chal-table th.group {
+  position: static; height: 36px; padding-top: 8px; text-align: left;
+  font-size: 13px; font-weight: 600; color: var(--foreground); background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+.chal-table tbody:first-of-type th.group { padding-top: 0; height: 28px; }
+.group-row { display: flex; align-items: center; gap: 12px; }
+.group-row .bar { flex: 1; max-width: 96px; margin-left: auto; }
+.group-row .tabular { font-weight: 400; color: var(--muted-foreground); min-width: 3ch; text-align: right; }
+.chal-table td { height: 34px; }
+.chal-table tbody tr:not(.group-head) { cursor: pointer; }
+.chal-table tr.is-picked td:first-child { box-shadow: inset 2px 0 0 var(--foreground); }
+.chal-table tr.is-picked .pick { font-weight: 600; }
+/* Positioned, so the hidden label inside stays with its row instead of
+   stretching the page past the scrolling list. */
+.mark { position: relative; display: grid; place-items: center; width: 16px; height: 16px; color: var(--muted-foreground); }
+.mark .icon { width: 14px; height: 14px; }
+.mark.solved { color: var(--success); }
 tr.is-solved .pick, tr.is-solved td { color: var(--muted-foreground); }
 
 .chal-detail { min-height: 320px; }
@@ -894,6 +916,7 @@ kbd {
   #view-challenges { grid-template-rows: minmax(0, 1fr); }
   #chal-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
   .chal-list .table-scroll { max-height: none; }
+  .chal-list { min-height: 0; }
 
   /* Plan: the rail and the answer at full height. */
   #plan-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }

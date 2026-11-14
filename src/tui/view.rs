@@ -2099,7 +2099,7 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
 // ----------------------------------------------------------------------
 
 /// Width of the challenge list beside its details.
-const CHALLENGE_LIST: u16 = 66;
+const CHALLENGE_LIST: u16 = 52;
 
 /// Every challenge on the left; on the right, the highlighted one: what
 /// it says, how to reach it, its files, and the last flag tried.
@@ -2130,56 +2130,78 @@ fn render_challenges(f: &mut Frame, area: Rect, app: &mut App) {
     let title = if app.unsolved_only {
         format!("Challenges left to solve ({})", list.len())
     } else {
-        format!("Challenges ({solved} of {} solved)", list.len())
+        format!("Challenges, {solved} of {} solved", list.len())
     };
     let inner = titled(f, list_area, &title);
-    let name_w = (inner.width as usize).saturating_sub(2 + 8 + 6 + 6 + 11 + 2 * 4);
-    let rows: Vec<Row> = list
-        .iter()
-        .map(|c| {
-            let state = if c.solved_by_me {
-                Span::styled("solved", theme::positive())
-            } else if app.board.on_disk.contains(&c.id) {
-                Span::styled("on disk", theme::muted())
-            } else {
-                Span::raw("")
-            };
-            // The same columns, in the same order, as on the page.
-            let row = Row::new(vec![
-                Cell::from(fit(&c.name, name_w)),
-                Cell::from(Span::styled(
-                    fit(&c.category, 11),
-                    theme::category(&c.category),
-                )),
-                Cell::from(right(pts(c.value)).style(theme::points())),
-                Cell::from(right(c.solves.map(|n| n.to_string()).unwrap_or_default())),
-                Cell::from(state),
-            ]);
-            if c.solved_by_me {
-                row.style(theme::muted())
-            } else {
-                row
+    let name_w = (inner.width as usize).saturating_sub(2 + 2 + 6 + 7 + 2 * 3);
+    // Grouped by category: a heading with how much of it is solved, then
+    // its challenges, each with one mark for solved or downloaded.
+    let mut rows: Vec<Row> = Vec::new();
+    let mut selected_row = 0;
+    let mut category: Option<&str> = None;
+    for (i, c) in list.iter().enumerate() {
+        if category != Some(c.category.as_str()) {
+            category = Some(c.category.as_str());
+            let all = app
+                .board
+                .data
+                .challenges
+                .iter()
+                .filter(|o| o.category == c.category);
+            let (done, total) = all.fold((0, 0), |(done, total), o| {
+                (done + usize::from(o.solved_by_me), total + 1)
+            });
+            if !rows.is_empty() {
+                rows.push(Row::new(vec![Cell::from("")]));
             }
-        })
-        .collect();
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(
+                    fit(&c.category, name_w),
+                    theme::category(&c.category).add_modifier(Modifier::BOLD),
+                )),
+                Cell::from(""),
+                Cell::from(right(format!("{done}/{total}")).style(theme::muted())),
+            ]));
+        }
+        if i == selected {
+            selected_row = rows.len();
+        }
+        let mark = if c.solved_by_me {
+            Span::styled("✓", theme::positive())
+        } else if app.board.on_disk.contains(&c.id) {
+            Span::styled("↓", theme::muted())
+        } else {
+            Span::raw("")
+        };
+        let row = Row::new(vec![
+            Cell::from(mark),
+            Cell::from(fit(&c.name, name_w)),
+            Cell::from(right(c.solves.map(|n| n.to_string()).unwrap_or_default())),
+            Cell::from(right(pts(c.value)).style(theme::points())),
+        ]);
+        rows.push(if c.solved_by_me {
+            row.style(theme::muted())
+        } else {
+            row
+        });
+    }
     let header = header_row(
         vec![
-            Cell::from("Challenge"),
-            Cell::from("Category"),
-            Cell::from(right("Pts")),
-            Cell::from(right("Solves")),
             Cell::from(""),
+            Cell::from("Challenge"),
+            Cell::from(right("Solves")),
+            Cell::from(right("Pts")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
     let table = Table::new(
         rows,
         [
+            Constraint::Length(2),
             Constraint::Min(10),
-            Constraint::Length(11),
             Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(8),
+            Constraint::Length(7),
         ],
     )
     .header(header)
@@ -2188,7 +2210,7 @@ fn render_challenges(f: &mut Frame, area: Rect, app: &mut App) {
     .highlight_symbol(Line::styled("▶", theme::accent()))
     .highlight_spacing(HighlightSpacing::Always);
     let mut state = app.chal_state;
-    state.select(Some(selected));
+    state.select(Some(selected_row));
     f.render_stateful_widget(table, inner, &mut state);
     *app.chal_state.offset_mut() = state.offset();
 

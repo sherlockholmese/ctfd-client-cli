@@ -357,34 +357,34 @@
     <section id="view-challenges" role="tabpanel" aria-labelledby="tab-challenges" class="view" hidden>
       <p class="empty empty-lg" id="chal-empty" hidden>Challenges aren't visible yet</p>
       <div id="chal-body">
-        <article class="card chal-list">
-          <header class="card-header row">
-            <h2 class="card-title" id="chal-title">Challenges</h2>
-            <div class="row gap-2">
-              <label class="input-wrap">
-                <svg class="icon"><use href="#i-search"/></svg>
-                <span class="sr-only">Find a challenge</span>
-                <input class="input" id="chal-search" type="search" placeholder="Find a challenge" autocomplete="off" spellcheck="false">
-              </label>
-              <button class="btn btn-outline" id="chal-unsolved" type="button" aria-pressed="false" title="Only challenges left to solve (U)">Unsolved</button>
-            </div>
-          </header>
+        <!-- Pick a challenge: grouped by category, solved ones marked. -->
+        <aside class="card chal-list" aria-label="Challenges">
+          <div class="row rail-head">
+            <h2 class="card-title">Challenges</h2>
+            <span class="card-note" id="chal-count"></span>
+          </div>
+          <div class="row gap-2 chal-tools">
+            <label class="input-wrap">
+              <svg class="icon"><use href="#i-search"/></svg>
+              <span class="sr-only">Find a challenge</span>
+              <input class="input" id="chal-search" type="search" placeholder="Find a challenge" autocomplete="off" spellcheck="false">
+            </label>
+            <button class="btn btn-outline" id="chal-unsolved" type="button" aria-pressed="false" title="Only challenges left to solve (U)">Unsolved</button>
+          </div>
           <div class="table-scroll">
-            <table class="table">
+            <table class="table chal-table" id="chal-rows">
               <thead>
                 <tr>
+                  <th class="col-mark" scope="col"><span class="sr-only">State</span></th>
                   <th scope="col">Challenge</th>
-                  <th scope="col" class="hide-sm col-cat">Category</th>
+                  <th class="num" scope="col">Solves</th>
                   <th class="num" scope="col">Points</th>
-                  <th class="num hide-sm col-extra" scope="col">Solves</th>
-                  <th scope="col" class="col-state"><span class="sr-only">State</span></th>
                 </tr>
               </thead>
-              <tbody id="chal-rows"></tbody>
             </table>
             <p class="empty" id="chal-none" hidden>No match</p>
           </div>
-        </article>
+        </aside>
 
         <article class="card chal-detail" aria-labelledby="chal-name">
           <header class="chal-head">
