@@ -256,7 +256,8 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("<-/->", "goal"),
                 ("↑/↓", "targets"),
                 ("s", "order"),
-                ("m", "default goal"),
+                ("d", "download"),
+                ("D", "all"),
                 ("Tab", "board"),
                 ("?", "keys"),
                 ("q", "quit"),
@@ -273,7 +274,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     const KEY_W: usize = 15;
-    let rows: [(&str, &str); 21] = [
+    let rows: [(&str, &str); 23] = [
         ("Tab, 1, 2, 3", "Switch Board / Analysis / Plan"),
         ("↑/↓, j/k", "Move selection or target list"),
         ("PgUp/PgDn", "Move ten rows"),
@@ -289,6 +290,8 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("<-/->, h/l", "Rival one place up / down (Analysis)"),
         ("", "Goal one place up / down (Plan)"),
         ("a", "Analyse the selected team"),
+        ("d", "Download the highlighted target (Plan)"),
+        ("D", "Download every challenge, as ctfdc dl does"),
         ("r", "Update now"),
         ("q, Ctrl-C", "Quit"),
         ("", ""),
@@ -2079,9 +2082,11 @@ fn render_notices(f: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     for n in &live {
         let (mark, style) = match n.kind {
-            NoticeKind::YourSolve | NoticeKind::RankUp | NoticeKind::Recovered => {
-                ("+", theme::positive())
-            }
+            NoticeKind::YourSolve
+            | NoticeKind::RankUp
+            | NoticeKind::Recovered
+            | NoticeKind::Downloaded => ("+", theme::positive()),
+            NoticeKind::Downloading => ("↓", theme::muted()),
             NoticeKind::RankDown | NoticeKind::Failed => ("!", theme::negative()),
             NoticeKind::Solve => ("·", theme::muted()),
         };

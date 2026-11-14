@@ -17,6 +17,8 @@ struct WebBoard {
     /// `http://127.0.0.1:PORT/`
     base: String,
     key: String,
+    /// The folder ctfdc runs in, where downloads land.
+    dir: std::path::PathBuf,
 }
 
 /// Read the first line ctfdc prints, handing the pipe back still open.
@@ -40,12 +42,13 @@ impl Drop for WebBoard {
 
 impl WebBoard {
     async fn start(server: &MockServer, extra: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap().keep();
         let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin("ctfdc"));
         command
             .args(["--url", &server.uri(), "--token", "test-token"])
             .args(["lb", "--web", "--no-open", "--port", "0"])
             .args(extra)
-            .current_dir(tempfile::tempdir().unwrap().keep())
+            .current_dir(&dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -62,6 +65,7 @@ impl WebBoard {
             _stdout: stdout,
             base: base.to_string(),
             key: key.to_string(),
+            dir,
         }
     }
 
@@ -300,6 +304,78 @@ async fn since_reranks_the_web_board() {
     );
     assert!(state["since"].is_i64());
     assert_eq!(state["host"].as_str().unwrap(), &server.uri()[7..]);
+}
+
+/// Wait for a notice of `kind` and return it.
+async fn notice(board: &WebBoard, kind: &str) -> Value {
+    for _ in 0..100 {
+        let state = board.state().await;
+        let found = state["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["kind"] == kind)
+            .cloned();
+        if let Some(found) = found {
+            return found;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("no {kind} notice");
+}
+
+#[tokio::test]
+async fn the_page_downloads_challenges_into_the_workspace() {
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 3).await;
+    let ok = |data: Value| {
+        ResponseTemplate::new(200).set_body_json(json!({"success": true, "data": data}))
+    };
+    for (id, name, category, files) in [
+        (1, "Warmup", "Misc", json!(["/files/aa/hint.txt"])),
+        (2, "Baby Pwn", "Pwn", json!([])),
+        (3, "Login", "Web", json!([])),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v1/challenges/{id}")))
+            .respond_with(ok(json!({
+                "id": id, "name": name, "category": category, "value": 100,
+                "description": "Find the flag.", "files": files
+            })))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/files/aa/hint.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("look closer"))
+        .mount(&server)
+        .await;
+    let board = WebBoard::start(&server, &[]).await;
+
+    // One challenge.
+    assert_eq!(board.post("download", json!({"id": 99})).await, 404);
+    assert_eq!(board.post("download", json!({"id": 2})).await, 202);
+    let done = notice(&board, "downloaded").await;
+    assert_eq!(done["title"], "Downloaded Baby Pwn");
+    assert!(board.dir.join("Pwn/Baby Pwn/README.md").is_file());
+    assert!(!board.dir.join("Misc").exists(), "only the one asked for");
+
+    // Everything, attachments included; the token stays out of the notice.
+    assert_eq!(board.post("download", json!({"id": null})).await, 202);
+    for _ in 0..100 {
+        if board.dir.join("Misc/Warmup/hint.txt").is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(board.dir.join("Misc/Warmup/hint.txt")).unwrap(),
+        "look closer"
+    );
+    assert!(board.dir.join("Web/Login/README.md").is_file());
+    let state = board.state().await.to_string();
+    assert!(state.contains("Downloaded 3 challenges"), "{state}");
+    assert!(!state.contains("test-token"));
 }
 
 #[test]

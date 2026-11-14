@@ -1513,6 +1513,24 @@
     applyLayout(null);
   }
 
+  // ------------------------------------------------------------ downloads
+
+  // Challenge files, fetched by ctfdc into your workspace as `ctfdc dl`
+  // does; the outcome comes back as a notification.
+  function download(id) {
+    if (state.snap?.downloading) return;
+    api("download", { id }).catch(() => {});
+  }
+  $("pull").addEventListener("click", () => download(null));
+  $("download-one").addEventListener("click", () => state.target !== null && download(state.target));
+  function renderDownloads() {
+    const busy = !!state.snap.downloading;
+    for (const id of ["pull", "download-one"]) {
+      $(id).setAttribute("aria-busy", busy);
+      $(id).disabled = busy;
+    }
+  }
+
   // ------------------------------------------------------------ notices
 
   // What just happened, bottom right: each notice shows once, stays a few
@@ -1526,6 +1544,8 @@
     rank_down: { icon: "fall", tone: "bad" },
     failed: { icon: "alert", tone: "bad" },
     recovered: { icon: "check", tone: "good" },
+    downloading: { icon: "download", tone: null },
+    downloaded: { icon: "download", tone: "good" },
   };
 
   function dismissToast(node) {
@@ -1598,6 +1618,8 @@
     else if (e.key === "3" || e.key === "p") showView("plan");
     else if (e.key === "?") keysDialog.showModal();
     else if (e.key === "r") refreshBtn.click();
+    else if (e.key === "D") download(null);
+    else if (e.key === "d" && state.view === "plan" && state.target !== null) download(state.target);
     else if (e.key === "/") {
       if (state.view !== "board") showView("board");
       if (state.layout === "graph") applyLayout("split");
@@ -1637,6 +1659,7 @@
       renderPlan();
     }
     if (!s.refreshing) refreshBtn.removeAttribute("aria-busy");
+    renderDownloads();
     renderNotices();
   }
 

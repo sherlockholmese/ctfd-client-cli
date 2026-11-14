@@ -22,6 +22,8 @@ pub struct Snapshot {
     pub updated_at: i64,
     pub refreshing: bool,
     pub error: Option<String>,
+    /// Whether challenge files are being downloaded right now.
+    pub downloading: bool,
     pub standings: Vec<Row>,
     pub lines: Vec<Line>,
     pub feed: Vec<Solve>,
@@ -34,8 +36,8 @@ pub struct Snapshot {
 #[derive(Serialize)]
 pub struct Notice {
     pub id: u64,
-    /// `your_solve`, `solve`, `rank_up`, `rank_down`, `failed` or
-    /// `recovered`.
+    /// `your_solve`, `solve`, `rank_up`, `rank_down`, `failed`,
+    /// `recovered`, `downloading` or `downloaded`.
     pub kind: &'static str,
     pub title: String,
     pub detail: String,
@@ -558,6 +560,7 @@ impl Snapshot {
             updated_at: model.updated_at.timestamp(),
             refreshing: model.refreshing,
             error: model.error.clone(),
+            downloading: model.downloading,
             standings,
             lines,
             feed,

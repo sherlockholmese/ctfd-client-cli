@@ -30,6 +30,7 @@
     <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.33 2q2 0 3.07-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.53"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
     <symbol id="i-layout" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/><path d="M12 12h9"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></symbol>
     <symbol id="i-keys" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6"/></symbol>
   </svg>
 
@@ -51,6 +52,9 @@
         <span class="status" id="status"></span>
         <button class="btn btn-ghost btn-icon" id="layout" type="button" aria-label="Board layout" title="Board layout (L)">
           <svg class="icon"><use href="#i-layout"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-icon" id="pull" type="button" aria-label="Download all challenges" title="Download all challenges (Shift+D)">
+          <svg class="icon"><use href="#i-download"/></svg>
         </button>
         <button class="btn btn-outline btn-icon" id="refresh" type="button" aria-label="Refresh now" title="Refresh now (R)">
           <svg class="icon"><use href="#i-refresh"/></svg>
@@ -335,6 +339,10 @@
             <header class="row signals-head">
               <h3 class="card-title" id="signals-title"></h3>
               <span class="level" id="signals-level"></span>
+              <button class="btn btn-outline btn-sm" id="download-one" type="button" title="Download this challenge's files (D)">
+                <svg class="icon"><use href="#i-download"/></svg>
+                <span>Download</span>
+              </button>
             </header>
             <!-- The drawings; the list after them says the same in words. -->
             <div class="viz" id="viz" aria-hidden="true"></div>
@@ -358,6 +366,8 @@
     <dl class="keys">
       <div><dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Board, Analysis, Plan</dd></div>
       <div><dt><kbd>R</kbd></dt><dd>Update now</dd></div>
+      <div><dt><kbd>D</kbd></dt><dd>Download the picked target's files (Plan)</dd></div>
+      <div><dt><kbd>Shift</kbd> <kbd>D</kbd></dt><dd>Download every challenge, as ctfdc dl does</dd></div>
       <div><dt><kbd>/</kbd></dt><dd>Find a team</dd></div>
       <div><dt><kbd>M</kbd></dt><dd>Jump to you (Board), rival above you (Analysis), default goal (Plan)</dd></div>
       <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Rival one place up or down (Analysis), goal one place up or down (Plan)</dd></div>

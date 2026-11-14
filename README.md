@@ -190,6 +190,8 @@ Both views update every 15 seconds (`-n SECS`), keep the last good data on scree
 
 Solve times are known for the teams whose solves are tracked: the graphed top N, pinned teams, you and your rival. "Into the CTF" counts from `since` when it is set, else from the earliest solve seen.
 
+Both views can fetch challenge files without leaving the scoreboard: `d` (or **Download** beside the target's name in the browser) downloads the highlighted Plan target, and `D` (the download button in the browser's top bar) downloads every visible challenge. This is `ctfdc dl`: files go to the folder with `ctfd.toml` (else the current folder), attachments already on disk are skipped, and a notification says what was fetched and where. In the browser the download is done by ctfdc on your machine, so the files land in your workspace, not in the browser's downloads.
+
 Both views show a notification in the bottom right corner when something happens: a new solve (several at once are summed up), your own solve, your rank moving up or down, and an update failing or working again. Each stays for a few seconds.
 
 The browser and the terminal show the same tabs, sections and numbers, laid out the same way, and share their keys: `1` `2` `3` for the tabs, `r` to update now, `/` to find a team, `m`, `<-`/`->`, `t`, `l` as above, and `?` for the list.

@@ -194,12 +194,102 @@ pub struct Board {
     pub model: BoardModel,
     /// Server host without the scoring-start suffix.
     pub server: String,
+    /// Fetches challenge files; `None` on demo data, which has none.
+    pub downloader: Option<Downloader>,
+}
+
+/// Downloads challenge files for the live views, as `ctfdc dl` does: into
+/// the workspace, skipping what is already on disk.
+#[derive(Clone)]
+pub struct Downloader {
+    client: std::sync::Arc<CtfdClient>,
+}
+
+impl Downloader {
+    /// Download in the background, reporting the start and the outcome on
+    /// `updates`.  Nothing is printed.
+    fn start(&self, what: model::Download, updates: UnboundedSender<Update>) {
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let outcome = Self::run(client, what, &updates).await;
+            let _ = updates.send(match outcome {
+                Ok((ok, title, detail)) => Update::Downloaded { ok, title, detail },
+                Err(e) => Update::Downloaded {
+                    ok: false,
+                    title: "Download failed".into(),
+                    detail: e.to_string().lines().next().unwrap_or_default().to_string(),
+                },
+            });
+        });
+    }
+
+    async fn run(
+        client: std::sync::Arc<CtfdClient>,
+        what: model::Download,
+        updates: &UnboundedSender<Update>,
+    ) -> anyhow::Result<(bool, String, String)> {
+        use crate::commands::download;
+        let mut challenges = client.get_challenges().await?;
+        if let model::Download::One(id) = what {
+            challenges.retain(|c| c.id == id);
+        }
+        let name = match (what, challenges.as_slice()) {
+            (_, []) => anyhow::bail!("No challenges are visible to download"),
+            (model::Download::One(_), [one]) => one.name.clone(),
+            (_, all) => format!("{} challenges", all.len()),
+        };
+        let _ = updates.send(Update::Downloading(format!("Downloading {name}")));
+        let asked = challenges.len();
+        let report = download::fetch_into(
+            client,
+            download::default_output(),
+            challenges,
+            false,
+            download::DEFAULT_JOBS,
+            true,
+        )
+        .await?;
+        let dir = std::fs::canonicalize(&report.dir).unwrap_or_else(|_| report.dir.clone());
+        let mut detail = format!("{}, in {}", report.details(), dir.display());
+        if let Some(first) = report.errors.first() {
+            detail = format!("{first}. {detail}");
+        }
+        let title = if report.errors.is_empty() {
+            format!("Downloaded {name}")
+        } else if asked == 1 {
+            format!("Couldn't download {name}")
+        } else {
+            format!("Downloaded {} of {asked} challenges", report.challenges)
+        };
+        Ok((report.errors.is_empty(), title, detail))
+    }
+}
+
+/// Start a download for a live view, or say why there is none to start.
+pub fn request_download(
+    downloader: Option<&Downloader>,
+    what: model::Download,
+    updates: &UnboundedSender<Update>,
+) {
+    match downloader {
+        Some(d) => d.start(what, updates.clone()),
+        None => {
+            let _ = updates.send(Update::Downloaded {
+                ok: false,
+                title: "Nothing to download".into(),
+                detail: "Demo data has no challenge files".into(),
+            });
+        }
+    }
 }
 
 /// Load the first snapshot from a CTFd server.
 pub async fn connect(config: &ResolvedConfig, args: &LeaderboardArgs) -> anyhow::Result<Board> {
     let client = CtfdClient::new(config);
     let me = client.get_me().await.ok();
+    let downloader = Downloader {
+        client: std::sync::Arc::new(client.clone()),
+    };
     let mut source = Source::Live(client, args.since, Box::default());
     let data = source.fetch(args.top, &[]).await?;
     let kind = AccountKind::from_standings(&data.standings);
@@ -222,6 +312,7 @@ pub async fn connect(config: &ResolvedConfig, args: &LeaderboardArgs) -> anyhow:
     let mut board = finish(source, host, false, args, me_account, me_name, data).await?;
     board.model.since = args.since;
     board.server = server;
+    board.downloader = Some(downloader);
     Ok(board)
 }
 
@@ -272,6 +363,7 @@ async fn finish(
         source,
         model,
         server,
+        downloader: None,
     })
 }
 
@@ -294,6 +386,8 @@ pub async fn fetch_loop(
             cmd = commands.recv() => match cmd {
                 None => return,
                 Some(Cmd::Refresh) => {}
+                // Views start downloads themselves; nothing to fetch here.
+                Some(Cmd::Download(_)) => continue,
                 Some(Cmd::Accounts(wanted)) => {
                     let new: Vec<u64> =
                         wanted.iter().copied().filter(|id| !accounts.contains(id)).collect();

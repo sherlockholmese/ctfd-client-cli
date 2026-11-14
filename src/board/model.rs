@@ -41,6 +41,23 @@ pub enum Update {
     Account(u64, Vec<AccountSolve>),
     Refreshing,
     Failed(String),
+    /// A download of challenge files began: what is being fetched.
+    Downloading(String),
+    /// It ended: whether it worked, and what to say about it.
+    Downloaded {
+        ok: bool,
+        title: String,
+        detail: String,
+    },
+}
+
+/// Which challenges to download.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Download {
+    /// Every visible challenge (files already on disk are skipped).
+    All,
+    /// The challenge with this ID.
+    One(u64),
 }
 
 /// Requests to the background fetcher.
@@ -49,6 +66,8 @@ pub enum Cmd {
     Refresh,
     /// Keep these accounts' solves fetched (outside the top list).
     Accounts(Vec<u64>),
+    /// Download challenge files; handled by the view, not the fetcher.
+    Download(Download),
 }
 
 /// Teams or users mode, from the scoreboard's `account_type`.
@@ -212,6 +231,10 @@ pub enum NoticeKind {
     Failed,
     /// Updates work again.
     Recovered,
+    /// A download of challenge files began.
+    Downloading,
+    /// It finished.
+    Downloaded,
 }
 
 impl NoticeKind {
@@ -224,6 +247,8 @@ impl NoticeKind {
             NoticeKind::RankDown => "rank_down",
             NoticeKind::Failed => "failed",
             NoticeKind::Recovered => "recovered",
+            NoticeKind::Downloading => "downloading",
+            NoticeKind::Downloaded => "downloaded",
         }
     }
 }
@@ -402,6 +427,8 @@ pub struct BoardModel {
     pub updated_at: chrono::DateTime<chrono::Local>,
     pub refreshing: bool,
     pub error: Option<String>,
+    /// Whether challenge files are being downloaded right now.
+    pub downloading: bool,
 
     pub changes: HashMap<String, Change>,
     /// Standings snapshots (rank, score) covering the change window.
@@ -451,6 +478,7 @@ impl BoardModel {
             updated_at: chrono::Local::now(),
             refreshing: false,
             error: None,
+            downloading: false,
             changes: HashMap::new(),
             snapshots: Default::default(),
             last_moved: HashMap::new(),
@@ -613,6 +641,19 @@ impl BoardModel {
                 }
                 self.error = Some(msg);
                 self.last_update = Instant::now();
+            }
+            Update::Downloading(what) => {
+                self.downloading = true;
+                self.notify(NoticeKind::Downloading, what, String::new());
+            }
+            Update::Downloaded { ok, title, detail } => {
+                self.downloading = false;
+                let kind = if ok {
+                    NoticeKind::Downloaded
+                } else {
+                    NoticeKind::Failed
+                };
+                self.notify(kind, title, detail);
             }
             Update::Account(id, solves) => {
                 self.data.accounts.insert(id, solves);

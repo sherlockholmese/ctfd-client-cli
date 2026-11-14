@@ -396,6 +396,53 @@ fn plan_ranks_targets_and_the_climb() {
 }
 
 #[test]
+fn download_keys_ask_for_the_target_or_everything() {
+    use crate::board::model::{Cmd, Download};
+    let mut app = demo_app(None);
+    // d needs a highlighted target, so it only works on Plan.
+    assert_eq!(app.on_key(key(KeyCode::Char('d'))), None);
+    assert_eq!(
+        app.on_key(key(KeyCode::Char('D'))),
+        Some(Cmd::Download(Download::All))
+    );
+    app.on_key(key(KeyCode::Char('3')));
+    app.on_key(key(KeyCode::Down));
+    let second = app.board.plan.listed()[1].stat.id;
+    assert_eq!(
+        app.on_key(key(KeyCode::Char('d'))),
+        Some(Cmd::Download(Download::One(second)))
+    );
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("d download") && t.contains("D all"), "{t}");
+
+    // While one runs, another cannot start; both ends are announced.
+    app.apply(Update::Downloading("Downloading 3 challenges".into()));
+    assert_eq!(app.on_key(key(KeyCode::Char('D'))), None);
+    assert!(text(&draw(&mut app, 160, 44)).contains("Downloading 3 challenges"));
+    app.apply(Update::Downloaded {
+        ok: true,
+        title: "Downloaded 3 challenges".into(),
+        detail: "1 new, 2 files fetched".into(),
+    });
+    let buf = draw(&mut app, 160, 44);
+    export("download-160x44", &buf);
+    let t = text(&buf);
+    assert!(t.contains("Downloaded 3 challenges") && t.contains("1 new, 2 files fetched"));
+    assert!(app.on_key(key(KeyCode::Char('D'))).is_some());
+}
+
+#[tokio::test]
+async fn demo_data_has_nothing_to_download() {
+    use crate::board::model::Download;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::board::request_download(None, Download::All, &tx);
+    let mut app = demo_app(None);
+    app.apply(rx.recv().await.unwrap());
+    assert!(!app.board.downloading);
+    assert!(text(&draw(&mut app, 160, 44)).contains("Demo data has no challenge files"));
+}
+
+#[test]
 fn graph_range_cycles_and_names_itself() {
     let mut app = demo_app(None);
     assert!(text(&draw(&mut app, 160, 44)).contains("Score over time"));

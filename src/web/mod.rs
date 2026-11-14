@@ -54,6 +54,10 @@ struct Shared {
     snapshot: watch::Sender<Arc<str>>,
     commands: mpsc::UnboundedSender<Cmd>,
     sent_wanted: Mutex<Vec<u64>>,
+    /// Fetches challenge files; `None` on demo data.
+    downloader: Option<board::Downloader>,
+    /// Where downloads report back, with the fetcher's updates.
+    updates: mpsc::UnboundedSender<Update>,
 }
 
 impl Shared {
@@ -105,6 +109,7 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
         source,
         model,
         server,
+        downloader,
     } = board;
     let wanted = model.wanted_accounts(None);
     let (interval, kind) = (model.interval, model.kind);
@@ -120,6 +125,8 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
         snapshot: snapshot_tx,
         commands: cmd_tx,
         sent_wanted: Mutex::new(wanted.clone()),
+        downloader,
+        updates: update_tx.clone(),
     });
 
     let fetcher = tokio::spawn(board::fetch_loop(
@@ -171,6 +178,7 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/rival", post(set_rival))
         .route("/goal", post(set_goal))
         .route("/sort", post(set_sort))
+        .route("/download", post(download))
         .route("/pin", post(set_pin))
         .layer(middleware::from_fn_with_state(shared.clone(), require_key));
 
@@ -371,6 +379,32 @@ async fn set_sort(State(shared): State<Arc<Shared>>, Json(body): Json<SortBody>)
     shared.lock().set_sort(sort);
     shared.publish();
     StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct DownloadBody {
+    /// Challenge to download; `null` for every visible challenge.
+    id: Option<u64>,
+}
+
+/// Download challenge files into the workspace, as `ctfdc dl` does.  The
+/// outcome arrives as a notice in a later snapshot.
+async fn download(State(shared): State<Arc<Shared>>, Json(body): Json<DownloadBody>) -> StatusCode {
+    let what = {
+        let model = shared.lock();
+        if model.downloading {
+            return StatusCode::CONFLICT;
+        }
+        match body.id {
+            Some(id) if model.demo || model.data.challenges.iter().any(|c| c.id == id) => {
+                board::model::Download::One(id)
+            }
+            Some(_) => return StatusCode::NOT_FOUND,
+            None => board::model::Download::All,
+        }
+    };
+    board::request_download(shared.downloader.as_ref(), what, &shared.updates);
+    StatusCode::ACCEPTED
 }
 
 #[derive(Deserialize)]

@@ -2,7 +2,7 @@
 //! layout, search, and key handling.
 
 use super::theme;
-use crate::board::model::{BoardModel, Cmd, Update, account_key};
+use crate::board::model::{BoardModel, Cmd, Download, Update, account_key};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use ratatui::widgets::TableState;
@@ -215,6 +215,15 @@ impl App {
             KeyCode::Esc => {}
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('r') => return Some(Cmd::Refresh),
+            // D pulls every challenge; d the highlighted target (Plan).
+            KeyCode::Char('D') if !self.board.downloading => {
+                return Some(Cmd::Download(Download::All));
+            }
+            KeyCode::Char('d') if self.view == View::Plan && !self.board.downloading => {
+                let listed = self.board.plan.listed();
+                let picked = listed.get(self.plan_state.selected().unwrap_or(0))?;
+                return Some(Cmd::Download(Download::One(picked.stat.id)));
+            }
             KeyCode::Tab => self.switch_view(match self.view {
                 View::Board => View::Analysis,
                 View::Analysis => View::Plan,

@@ -691,7 +691,9 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
   flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
   display: grid; gap: 8px;
 }
-.signals-head { justify-content: space-between; gap: 16px; }
+.signals-head { gap: 16px; }
+.signals-head .card-title { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.btn[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 /* One timeline, then four blocks of a heading over three lines: the
    arrangement the terminal uses too. */
 .viz { display: grid; gap: 12px 32px; grid-template-columns: repeat(4, minmax(0, 1fr)); }

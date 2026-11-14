@@ -42,7 +42,9 @@ pub async fn run_demo(args: LeaderboardArgs) -> anyhow::Result<()> {
 
 async fn start(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
     let app = App::new(board.model);
+    let downloader = board.downloader;
     let (update_tx, update_rx) = mpsc::unbounded_channel::<Update>();
+    let download_tx = update_tx.clone();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Cmd>();
     let fetcher = tokio::spawn(board::fetch_loop(
         board.source,
@@ -54,7 +56,12 @@ async fn start(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
         update_tx,
     ));
 
-    let result = tokio::task::spawn_blocking(move || ui_loop(app, update_rx, cmd_tx)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        ui_loop(app, update_rx, cmd_tx, |what| {
+            board::request_download(downloader.as_ref(), what, &download_tx)
+        })
+    })
+    .await;
     fetcher.abort();
     result?
 }
@@ -63,6 +70,7 @@ fn ui_loop(
     mut app: App,
     mut updates: mpsc::UnboundedReceiver<Update>,
     commands: mpsc::UnboundedSender<Cmd>,
+    download: impl Fn(crate::board::model::Download),
 ) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
     let result = (|| -> anyhow::Result<()> {
@@ -76,7 +84,12 @@ fn ui_loop(
                 && key.kind == KeyEventKind::Press
                 && let Some(cmd) = app.on_key(key)
             {
-                let _ = commands.send(cmd);
+                match cmd {
+                    Cmd::Download(what) => download(what),
+                    cmd => {
+                        let _ = commands.send(cmd);
+                    }
+                }
             }
         }
         Ok(())
