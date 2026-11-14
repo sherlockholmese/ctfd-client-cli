@@ -1,4 +1,5 @@
-//! The live scoreboard behind `ctfdc lb`, independent of how it is drawn.
+//! The live scoreboard behind `ctfdc lb` and `ctfdc web`, independent of
+//! how it is drawn.
 //!
 //! [`connect`] / [`connect_demo`] load the first snapshot; [`fetch_loop`]
 //! then refreshes it on an interval (or on demand) and sends updates to a

@@ -16,55 +16,45 @@ pub enum View {
     Plain,
 }
 
-/// Pick the view for `args`.
-///
-/// `--plain` and `--tui` are taken at their word, as is anything that
-/// asks for the web page (`--web`, `--port`, `--bind`, `--no-open`).
-/// Otherwise output that is not an interactive terminal gets the text,
-/// and a terminal gets the web page when a browser can be opened from
-/// it, else the terminal view.
-pub fn choose_view(args: &LeaderboardArgs, interactive: bool, browser: bool) -> View {
+/// Pick the view for `args`: text with `--plain` or when the output is
+/// not an interactive terminal, else the terminal view.  The web view is
+/// `ctfdc web`; its former flags here (`--web`, `--port`, `--bind`,
+/// `--no-open`) still select it.
+pub fn choose_view(args: &LeaderboardArgs, interactive: bool) -> View {
     let default_bind = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
     if args.plain {
         View::Plain
-    } else if args.tui {
-        View::Tui
     } else if args.web || args.no_open || args.port != 0 || args.bind != default_bind {
         View::Web
-    } else if !interactive {
-        View::Plain
-    } else if browser {
-        View::Web
-    } else {
+    } else if interactive {
         View::Tui
+    } else {
+        View::Plain
     }
 }
 
-/// Pick the view for this process, saying so when the terminal view
-/// stands in for the web page.
+/// Pick the view for this process.
 pub fn view_here(args: &LeaderboardArgs) -> View {
     let interactive = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
-    let view = choose_view(args, interactive, crate::web::browser_available());
-    if view == View::Tui && !args.tui {
-        eprintln!(
-            "No browser can be opened from here, so the scoreboard is in the terminal. \
-             `ctfdc lb --web` serves the page and prints its link."
-        );
-    }
-    view
+    choose_view(args, interactive)
 }
 
-/// Show the CTFd scoreboard: in the browser, in the terminal, or printed
-/// once (see [`choose_view`]).  The qualifying line comes from `--cutoff`,
-/// else `cutoff` in the nearest `ctfd.toml`; the scoring start time
-/// likewise from `--since`, else `since`.
-pub async fn run(config: ResolvedConfig, mut args: LeaderboardArgs) -> anyhow::Result<()> {
+/// Fill in what the workspace's `ctfd.toml` sets and the flags leave out:
+/// the qualifying line (`cutoff`) and the scoring start (`since`).
+pub fn with_workspace_defaults(mut args: LeaderboardArgs) -> anyhow::Result<LeaderboardArgs> {
     if args.cutoff.is_none() {
         args.cutoff = crate::config::workspace_qualify()?;
     }
     if args.since.is_none() {
         args.since = crate::config::workspace_since()?;
     }
+    Ok(args)
+}
+
+/// Show the CTFd scoreboard in the terminal, or printed once (see
+/// [`choose_view`]).
+pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Result<()> {
+    let args = with_workspace_defaults(args)?;
     match view_here(&args) {
         View::Web => crate::web::run(config, args).await,
         View::Tui => crate::tui::run(config, args).await,
@@ -249,33 +239,53 @@ mod tests {
     use crate::models::ScoreEvent;
     use clap::Parser;
 
-    fn view(flags: &[&str], interactive: bool, browser: bool) -> View {
+    fn view(flags: &[&str], interactive: bool) -> View {
         let argv = ["ctfdc", "lb"].iter().chain(flags).copied();
         let cli = crate::config::Cli::try_parse_from(argv).unwrap();
         let crate::config::Commands::Leaderboard(args) = cli.command else {
             panic!("not the leaderboard command");
         };
-        choose_view(&args, interactive, browser)
+        choose_view(&args, interactive)
     }
 
     #[test]
-    fn web_is_the_default_and_the_terminal_the_fallback() {
-        assert_eq!(view(&[], true, true), View::Web);
-        assert_eq!(view(&[], true, false), View::Tui);
-        // Piped output stays text, browser or not.
-        assert_eq!(view(&[], false, true), View::Plain);
-        assert_eq!(view(&[], false, false), View::Plain);
+    fn the_terminal_view_on_a_terminal_and_text_when_piped() {
+        assert_eq!(view(&[], true), View::Tui);
+        assert_eq!(view(&[], false), View::Plain);
+        assert_eq!(view(&["--plain"], true), View::Plain);
     }
 
     #[test]
-    fn flags_override_the_default_view() {
-        assert_eq!(view(&["--tui"], true, true), View::Tui);
-        assert_eq!(view(&["--plain"], true, true), View::Plain);
-        // Asking for the page serves it even with no browser or terminal.
-        assert_eq!(view(&["--web"], false, false), View::Web);
-        assert_eq!(view(&["--no-open"], true, false), View::Web);
-        assert_eq!(view(&["--port", "8080"], false, false), View::Web);
-        assert_eq!(view(&["--bind", "0.0.0.0"], true, false), View::Web);
+    fn the_former_web_flags_still_serve_the_page() {
+        assert_eq!(view(&["--web"], false), View::Web);
+        assert_eq!(view(&["--no-open"], true), View::Web);
+        assert_eq!(view(&["--port", "8080"], false), View::Web);
+        assert_eq!(view(&["--bind", "0.0.0.0"], true), View::Web);
+    }
+
+    #[test]
+    fn web_takes_the_board_options_of_the_terminal_view() {
+        let cli = crate::config::Cli::try_parse_from([
+            "ctfdc",
+            "web",
+            "--port",
+            "8080",
+            "--no-open",
+            "-n",
+            "5",
+            "--top",
+            "3",
+            "--cutoff",
+            "8",
+        ])
+        .unwrap();
+        let crate::config::Commands::Web(args) = cli.command else {
+            panic!("not the web command");
+        };
+        let args = LeaderboardArgs::from(args);
+        assert_eq!((args.port, args.no_open), (8080, true));
+        assert_eq!((args.interval, args.top, args.cutoff), (5, 3, Some(8)));
+        assert_eq!(choose_view(&args, false), View::Web);
     }
 
     fn entry(pos: i64, id: u64, name: &str, score: i64) -> ScoreboardEntry {

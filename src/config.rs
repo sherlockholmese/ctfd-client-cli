@@ -7,7 +7,8 @@ Quick start:
   ctfdc ls -u                          What's left to solve (with IDs)
   ctfdc s 'flag{...}'                  Submit from inside a challenge folder
   ctfdc s rsa 'flag{...}'              Submit by challenge name or ID
-  ctfdc lb                             Scoreboard
+  ctfdc lb                             Scoreboard in the terminal
+  ctfdc web                            Scoreboard and planning in your browser
 
 Run `ctfdc <command> -h` for examples of each command.";
 
@@ -154,7 +155,7 @@ Examples:
     )]
     Submit(SubmitArgs),
 
-    /// Live scoreboard in your browser, or the terminal (plain text when piped)
+    /// Live scoreboard in the terminal (plain text when piped)
     #[command(
         visible_aliases = ["lb", "scoreboard"],
         after_help = "\
@@ -165,21 +166,43 @@ Examples:
   ctfdc lb --cutoff 10     Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
   ctfdc lb --since '2026-11-07 09:00'
                            Only count points scored from then on (or set since in ctfd.toml)
-  ctfdc lb --tui           Live view in the terminal instead
   ctfdc lb --plain         Print once as text (also used when piped)
   ctfdc lb --demo          Try the live view on fictional data
-  ctfdc lb --port 8080 --no-open
-                           Serve on a fixed port without opening a browser
-
-The live scoreboard opens in your browser.  Where no browser can be opened
-(over SSH, or without a desktop) it runs in the terminal instead; --web
-serves the page anyway and prints its link.
 
 Three views: Board (standings, graph, latest solves), Analysis (you vs a
 rival: gaps, momentum, catch-up targets, categories, your edge) and Plan
-(what to solve next).  In the terminal, Tab switches and ? lists all keys."
+(what to solve next).  Tab switches and ? lists all keys.
+
+The same in your browser: ctfdc web"
     )]
     Leaderboard(LeaderboardArgs),
+
+    /// The scoreboard, rival analysis and planning in your browser
+    #[command(
+        visible_alias = "ui",
+        long_about = "The scoreboard, rival analysis and planning in your browser.\n\n\
+            Serves a page on this machine and opens it. ctfdc makes every \
+            request to the CTF itself, so your token never reaches the \
+            browser, and the page only works with the key in the link \
+            printed at start.",
+        after_help = "\
+Examples:
+  ctfdc web                Serve the page and open it in your browser
+  ctfdc web --demo         Try it on fictional data
+  ctfdc web --port 8080 --no-open
+                           Fixed port, print the link instead of opening it
+  ctfdc web -n 5 --top 5   Refresh every 5 seconds, graph the top 5
+  ctfdc web --cutoff 10    Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
+
+Three tabs: Board (standings, graph, latest solves), Analysis (you vs a
+rival) and Plan (what to solve next).  Press ? on the page for its keys.
+
+From another machine, forward the port: ssh -L 8080:127.0.0.1:8080 host,
+then run with --port 8080 --no-open and open the printed link.
+
+The same in the terminal: ctfdc lb"
+    )]
+    Web(WebArgs),
 
     /// Print a shell completion script (bash, zsh, fish, ...)
     #[command(after_help = "\
@@ -249,41 +272,27 @@ pub struct LeaderboardArgs {
     #[arg(long, conflicts_with = "plain")]
     pub demo: bool,
 
-    /// Serve the live scoreboard as a web page even where no browser can
-    /// be opened (the default wherever one can)
-    #[arg(short = 'w', long, conflicts_with = "plain")]
+    // The web view's options from before it became `ctfdc web`: still
+    // accepted here, no longer advertised.
+    /// Serve the web view (now `ctfdc web`)
+    #[arg(short = 'w', long, hide = true, conflicts_with = "plain")]
     pub web: bool,
 
-    /// Show the live scoreboard in the terminal instead of the browser
-    #[arg(
-        long,
-        visible_alias = "terminal",
-        conflicts_with_all = ["plain", "web", "port", "bind", "no_open"]
-    )]
-    pub tui: bool,
-
-    /// Port for the web page [default: any free port]
-    #[arg(
-        long,
-        value_name = "PORT",
-        default_value_t = 0,
-        conflicts_with = "plain"
-    )]
+    /// Port for the web view (now `ctfdc web --port`)
+    #[arg(long, hide = true, default_value_t = 0, conflicts_with = "plain")]
     pub port: u16,
 
-    /// Address for the web page to listen on (other machines can reach
-    /// the scoreboard unless this is a loopback address)
+    /// Address for the web view (now `ctfdc web --bind`)
     #[arg(
         long,
-        value_name = "ADDR",
+        hide = true,
         default_value = "127.0.0.1",
         conflicts_with = "plain"
     )]
     pub bind: std::net::IpAddr,
 
-    /// Serve the web page and print its address instead of opening a
-    /// browser
-    #[arg(long, conflicts_with = "plain")]
+    /// Serve the web view without opening it (now `ctfdc web --no-open`)
+    #[arg(long, hide = true, conflicts_with = "plain")]
     pub no_open: bool,
 
     /// Number of top teams drawn in the graph
@@ -294,6 +303,78 @@ pub struct LeaderboardArgs {
         value_parser = clap::value_parser!(u32).range(1..=25)
     )]
     pub top: u32,
+}
+
+/// Options for the `web` command.
+#[derive(Args, Debug, Clone)]
+pub struct WebArgs {
+    /// Port to serve on [default: any free port]
+    #[arg(long, value_name = "PORT", default_value_t = 0)]
+    pub port: u16,
+
+    /// Address to listen on (other machines can reach the page unless
+    /// this is a loopback address)
+    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1")]
+    pub bind: std::net::IpAddr,
+
+    /// Print the link instead of opening a browser
+    #[arg(long)]
+    pub no_open: bool,
+
+    /// Seconds between live updates
+    #[arg(
+        short = 'n',
+        long = "interval",
+        value_name = "SECS",
+        default_value_t = 15,
+        value_parser = clap::value_parser!(u64).range(2..=3600)
+    )]
+    pub interval: u64,
+
+    /// Draw the qualifying line under this place [default: `cutoff` in ctfd.toml]
+    #[arg(
+        long = "cutoff",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub cutoff: Option<u32>,
+
+    /// Only count points scored at or after this time, re-ranking the
+    /// scoreboard (RFC 3339, `YYYY-MM-DD HH:MM[:SS]` in local time, or Unix
+    /// seconds) [default: `since` in ctfd.toml]
+    #[arg(long = "since", value_name = "TIME", value_parser = parse_since_arg)]
+    pub since: Option<i64>,
+
+    /// Serve fictional, simulated data (no server needed)
+    #[arg(long)]
+    pub demo: bool,
+
+    /// Number of top teams drawn in the graph
+    #[arg(
+        long = "top",
+        value_name = "N",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u32).range(1..=25)
+    )]
+    pub top: u32,
+}
+
+impl From<WebArgs> for LeaderboardArgs {
+    /// The board options the web view shares with the terminal one.
+    fn from(args: WebArgs) -> Self {
+        LeaderboardArgs {
+            plain: false,
+            interval: args.interval,
+            cutoff: args.cutoff,
+            since: args.since,
+            demo: args.demo,
+            web: true,
+            port: args.port,
+            bind: args.bind,
+            no_open: args.no_open,
+            top: args.top,
+        }
+    }
 }
 
 /// Options for the `status` command.

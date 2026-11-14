@@ -1681,7 +1681,7 @@
 
   function connect() {
     if (!KEY) {
-      showFatal("This page needs the link ctfdc printed", "Run ctfdc lb and open the link it shows. The key at the end of it is required.");
+      showFatal("This page needs the link ctfdc printed", "Run ctfdc web and open the link it shows. The key at the end of it is required.");
       return;
     }
     const source = new EventSource(`api/events?k=${encodeURIComponent(KEY)}`);
@@ -1707,7 +1707,7 @@
             showFatal("This link has expired", "ctfdc makes a new link each time it starts. Open the link it printed most recently.");
           }
         } catch {
-          showFatal("Can't reach ctfdc", "Start it again with ctfdc lb.");
+          showFatal("Can't reach ctfdc", "Start it again with ctfdc web.");
         }
       }
     });

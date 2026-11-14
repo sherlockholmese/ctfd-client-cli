@@ -1,4 +1,4 @@
-//! A deterministic, fictional CTF for `ctfdc lb --demo`.
+//! A deterministic, fictional CTF for `ctfdc lb --demo` and `ctfdc web --demo`.
 //!
 //! Lets the scoreboard UI be checked before a CTF starts (or offline):
 //! 36 fictional teams play 30 fictional challenges with CTFd-style

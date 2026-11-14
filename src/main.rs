@@ -29,6 +29,9 @@ async fn main() -> anyhow::Result<()> {
                 _ => tui::run_demo(args).await,
             };
         }
+        Commands::Web(ref args) if args.demo => {
+            return commands::web::run_demo(args.clone()).await;
+        }
         Commands::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "ctfdc", &mut std::io::stdout());
             return Ok(());

@@ -1,4 +1,4 @@
-//! `ctfdc lb`'s web view: the browser scoreboard server, against a mocked CTFd.
+//! `ctfdc web`: the browser scoreboard server, against a mocked CTFd.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -8,7 +8,7 @@ use std::process::{Child, ChildStdout, Stdio};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// A running `ctfdc lb --web`, killed on drop.
+/// A running `ctfdc web`, killed on drop.
 struct WebBoard {
     child: Child,
     /// Kept open: ctfdc keeps printing after the link, and a closed pipe
@@ -46,7 +46,7 @@ impl WebBoard {
         let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin("ctfdc"));
         command
             .args(["--url", &server.uri(), "--token", "test-token"])
-            .args(["lb", "--web", "--no-open", "--port", "0"])
+            .args(["web", "--no-open", "--port", "0"])
             .args(extra)
             .current_dir(&dir)
             .stdin(Stdio::null())
@@ -379,35 +379,46 @@ async fn the_page_downloads_challenges_into_the_workspace() {
 }
 
 #[test]
-fn views_cannot_be_combined() {
-    let lb = |flags: &[&str]| {
-        let mut cmd = Command::cargo_bin("ctfdc").unwrap();
-        cmd.args(["--url", "http://localhost:9", "--token", "t", "lb"])
-            .args(flags);
-        cmd
-    };
-    for flags in [
-        &["--web", "--plain"][..],
-        &["--web", "--tui"],
-        &["--tui", "--plain"],
-        &["--tui", "--port", "8080"],
-        &["--tui", "--no-open"],
-        &["--plain", "--port", "8080"],
-    ] {
-        lb(flags)
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("cannot be used with"));
-    }
+fn web_has_its_own_help_and_no_text_mode() {
+    Command::cargo_bin("ctfdc")
+        .unwrap()
+        .args(["web", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("--port"))
+        .stdout(predicate::str::contains("--no-open"));
+    Command::cargo_bin("ctfdc")
+        .unwrap()
+        .args([
+            "--url",
+            "http://localhost:9",
+            "--token",
+            "t",
+            "web",
+            "--plain",
+        ])
+        .assert()
+        .failure();
+    // The scoreboard command no longer advertises the web view's options.
+    Command::cargo_bin("ctfdc")
+        .unwrap()
+        .args(["lb", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ctfdc web"))
+        .stdout(predicate::str::contains("--port").not())
+        .stdout(predicate::str::contains("--no-open").not());
 }
 
+/// `ctfdc lb --web` and its options came before `ctfdc web`; they still work.
 #[tokio::test]
-async fn web_options_serve_the_page_without_web() {
+async fn the_former_lb_flags_still_serve_the_page() {
     let server = MockServer::start().await;
     mock_ctfd(&server, 2).await;
     let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("ctfdc"))
         .args(["--url", &server.uri(), "--token", "t"])
-        .args(["lb", "--no-open"])
+        .args(["lb", "--web", "--no-open", "--port", "0"])
         .current_dir(tempfile::tempdir().unwrap().keep())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

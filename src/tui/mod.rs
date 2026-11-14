@@ -23,7 +23,7 @@ fn ensure_terminal() -> anyhow::Result<()> {
     } else {
         anyhow::bail!(
             "The terminal scoreboard needs an interactive terminal. Use `ctfdc lb --plain` \
-             for text or `ctfdc lb --web` for the page."
+             for text or `ctfdc web` for the page."
         )
     }
 }

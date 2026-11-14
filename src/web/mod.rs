@@ -1,4 +1,4 @@
-//! Live scoreboard in the browser (`ctfdc lb`, the default view).
+//! The scoreboard in the browser (`ctfdc web`).
 //!
 //! Serves a single page plus a small JSON API on a local address.  The
 //! server owns the [`BoardModel`] and does every CTFd request itself, so
@@ -158,7 +158,11 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
     let _ = writeln!(out, "Press Ctrl-C to stop.");
     let _ = out.flush();
     if !args.no_open {
-        open_browser(&url);
+        if browser_available() {
+            open_browser(&url);
+        } else {
+            eprintln!("No browser can be opened from here. Open the link above yourself.");
+        }
     }
 
     let result = tokio::select! {
