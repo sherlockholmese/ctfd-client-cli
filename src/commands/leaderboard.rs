@@ -371,13 +371,11 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
     };
     let mut out = String::new();
     let count = format!("{} {noun}", grouped(entries.len() as i64));
-    let gap = width.saturating_sub(2 + 5 + 2 + text_width(&standings.host) + text_width(&count));
     let _ = writeln!(
         out,
-        "\n  {}  {}{}{}",
+        "\n  {}  {}  {}",
         paint(BOLD, "ctfdc"),
         standings.host,
-        " ".repeat(gap.max(2)),
         paint(DIM, &count)
     );
     if let Some(since) = standings.since {
@@ -400,6 +398,9 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
         return out;
     }
 
+    // Every column before the name has a fixed width, and the name comes
+    // last: terminals disagree on how wide CJK, emoji and some symbols
+    // are, and this way no such disagreement can push a column out of line.
     let rows = shown(standings);
     let rank_w = entries
         .iter()
@@ -419,16 +420,17 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
             .max()
             .unwrap_or(0),
     );
-    // Marker, rank, name, score, behind, bar, with two spaces between.
-    let fixed = 2 + rank_w + 2 + 2 + score_w + 2 + behind_w + 2;
+    // Marker, rank, score, behind, each followed by two spaces; the bar.
+    let fixed = 2 + rank_w + 2 + score_w + 2 + behind_w + 2;
     let longest = rows
         .iter()
         .map(|&i| text_width(&entries[i].name))
         .max()
         .unwrap_or(4)
         + 5;
-    let name_w = longest.clamp(12, 36.min(width.saturating_sub(fixed + 12)).max(12));
-    let bar_w = width.saturating_sub(fixed + name_w).clamp(8, 32);
+    let name_w = longest.clamp(12, 30);
+    let bar_w = width.saturating_sub(fixed + 2 + name_w).clamp(8, 32);
+    let total = fixed + bar_w + 2 + name_w;
     let best = entries.iter().map(|e| e.score).max().unwrap_or(0).max(1) as f64;
 
     let _ = writeln!(
@@ -437,8 +439,8 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
         paint(
             DIM,
             &format!(
-                "  {:>rank_w$}  {:<name_w$}  {:>score_w$}  {:>behind_w$}",
-                "#", "Team", "Score", "Behind"
+                "  {:>rank_w$}  {:>score_w$}  {:>behind_w$}  {:<bar_w$}  Team",
+                "#", "Score", "Behind", ""
             )
         )
     );
@@ -447,23 +449,16 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
         let e = &entries[i];
         let mine = standings.me == Some(i);
         if previous.is_some_and(|p| p + 1 != i) {
-            let _ = writeln!(out, "  {}", paint(DIM, &format!("{:>rank_w$}", "⋮")));
+            let _ = writeln!(out, "  {}", paint(DIM, &format!("{:>rank_w$}", "..")));
         }
         if standings.cutoff == Some(i as u32) && i > 0 {
             let label = format!("── top {i} qualify ");
             let rule = format!(
                 "{label}{}",
-                "─".repeat((fixed + name_w + bar_w).saturating_sub(text_width(&label) + 2))
+                "─".repeat(total.saturating_sub(2 + text_width(&label)))
             );
             let _ = writeln!(out, "  {}", paint(LINE, &rule));
         }
-        let name = fit(&e.name, if mine { name_w - 5 } else { name_w });
-        let pad = " ".repeat(name_w - text_width(&name) - if mine { 5 } else { 0 });
-        let name = match (mine, i < 3) {
-            (true, _) => format!("{} {}{pad}", paint(YOU, &name), paint(DIM, " you")),
-            (false, true) => format!("{}{pad}", paint(BOLD, &name)),
-            (false, false) => format!("{name}{pad}"),
-        };
         let behind = match i.checked_sub(1).map(|j| entries[j].score - e.score) {
             None => String::new(),
             Some(0) => "tied".into(),
@@ -475,17 +470,25 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
             (false, true) => "",
             (false, false) => DIM,
         };
+        let drawn_bar = bar(e.score.max(0) as f64 / best, bar_w);
+        let bar_pad = " ".repeat(bar_w - drawn_bar.chars().count());
+        let name = fit(&e.name, name_w - if mine { 5 } else { 0 });
+        let name = match (mine, i < 3) {
+            (true, _) => format!("{} {}", paint(YOU, &name), paint(DIM, " you")),
+            (false, true) => paint(BOLD, &name),
+            (false, false) => name,
+        };
         let _ = writeln!(
             out,
-            "{} {}  {name}  {}  {}  {}",
-            if mine { paint(YOU, "▶") } else { " ".into() },
+            "{} {}  {}  {}  {}{bar_pad}  {name}",
+            if mine { paint(YOU, ">") } else { " ".into() },
             paint(
                 if i < 3 { BOLD } else { DIM },
                 &format!("{:>rank_w$}", e.pos)
             ),
             paint(BOLD, &format!("{:>score_w$}", grouped(e.score))),
             paint(DIM, &format!("{behind:>behind_w$}")),
-            paint(bar_style, &bar(e.score.max(0) as f64 / best, bar_w)),
+            paint(bar_style, &drawn_bar),
         );
         previous = Some(i);
     }
@@ -494,7 +497,10 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
         let _ = writeln!(
             out,
             "  {}",
-            paint(DIM, &format!("and {} more", grouped(hidden as i64)))
+            paint(
+                DIM,
+                &format!("{:rank_w$}  and {} more", "", grouped(hidden as i64))
+            )
         );
     }
 
@@ -620,7 +626,8 @@ mod tests {
             "ctfdc  ctf.example.com",
             "5 teams",
             "── top 2 qualify ─",
-            "▶ 4  Delta  you",
+            "> 4   4,000   5,000",
+            "Delta  you",
             "12,500",
             "tied",
             "You are #4 of 5 with 4,000 points.",
@@ -641,14 +648,37 @@ mod tests {
         assert_eq!(bar_of("Delta"), 10);
 
         let coloured = drawn(&board(None, Some(2)), true, 100);
-        assert!(coloured.contains("\x1b[1;36m▶\x1b[0m"));
+        assert!(coloured.contains("\x1b[1;36m>\x1b[0m"));
+
+        // Nothing of variable width comes before the bars or the names:
+        // both start at the same character on every row, whatever the
+        // names are.
+        let mut wide = board(None, None);
+        wide.entries[1].name = "東京ヒープ研究会".into();
+        wide.entries[2].name = "🦀 Rustaceans".into();
+        let text = drawn(&wide, false, 100);
+        let column = |of: &dyn Fn(&str) -> Option<usize>| {
+            text.lines()
+                .filter(|l| l.contains('█'))
+                .filter_map(of)
+                .collect::<std::collections::HashSet<usize>>()
+        };
+        assert_eq!(column(&|l| l.chars().position(|c| c == '█')).len(), 1);
+        let names = ["Alpha", "東京", "🦀", "Delta", "Echo"];
+        let name_at = |l: &str| {
+            names
+                .iter()
+                .find_map(|n| l.find(n))
+                .map(|byte| l[..byte].chars().count())
+        };
+        assert_eq!(column(&name_at).len(), 1, "{text}");
     }
 
     #[test]
     fn top_keeps_your_row() {
         let text = drawn(&board(Some(2), None), false, 100);
-        assert!(text.contains("Bravo") && !text.contains("Charlie   "));
-        assert!(text.contains('⋮') && text.contains("Delta  you"));
+        assert!(text.contains("  Bravo\n") && !text.contains("  Charlie\n"));
+        assert!(text.contains("  ..\n") && text.contains("Delta  you"));
         assert!(text.contains("and 2 more"));
         let bare = plain(&board(Some(2), None));
         assert_eq!(bare.lines().count(), 4, "{bare}");
