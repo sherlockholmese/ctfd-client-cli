@@ -42,9 +42,9 @@ pub async fn run_demo(args: BoardArgs) -> anyhow::Result<()> {
 
 async fn start(board: Board, args: &BoardArgs) -> anyhow::Result<()> {
     let app = App::new(board.model);
-    let downloader = board.downloader;
+    let workspace = board.workspace;
     let (update_tx, update_rx) = mpsc::unbounded_channel::<Update>();
-    let download_tx = update_tx.clone();
+    let action_tx = update_tx.clone();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Cmd>();
     let fetcher = tokio::spawn(board::fetch_loop(
         board.source,
@@ -57,8 +57,20 @@ async fn start(board: Board, args: &BoardArgs) -> anyhow::Result<()> {
     ));
 
     let result = tokio::task::spawn_blocking(move || {
-        ui_loop(app, update_rx, cmd_tx, |what| {
-            board::request_download(downloader.as_ref(), what, &download_tx)
+        // Downloads, details and flags are the view's own business; the
+        // rest goes to the fetcher.
+        ui_loop(app, update_rx, cmd_tx, |cmd, model| {
+            let workspace = workspace.as_ref();
+            match cmd {
+                Cmd::Download(what) => board::request_download(workspace, what, &action_tx),
+                Cmd::Detail(id) => board::request_detail(workspace, id, &action_tx),
+                Cmd::Submit(id, flag) => {
+                    let challenge = model.data.challenges.iter().find(|c| c.id == id);
+                    board::request_submit(workspace, challenge.cloned(), id, flag, &action_tx);
+                }
+                other => return Some(other),
+            }
+            None
         })
     })
     .await;
@@ -70,7 +82,7 @@ fn ui_loop(
     mut app: App,
     mut updates: mpsc::UnboundedReceiver<Update>,
     commands: mpsc::UnboundedSender<Cmd>,
-    download: impl Fn(crate::board::model::Download),
+    act: impl Fn(Cmd, &crate::board::model::BoardModel) -> Option<Cmd>,
 ) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
     let result = (|| -> anyhow::Result<()> {
@@ -83,13 +95,9 @@ fn ui_loop(
                 && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
                 && let Some(cmd) = app.on_key(key)
+                && let Some(cmd) = act(cmd, &app.board)
             {
-                match cmd {
-                    Cmd::Download(what) => download(what),
-                    cmd => {
-                        let _ = commands.send(cmd);
-                    }
-                }
+                let _ = commands.send(cmd);
             }
         }
         Ok(())

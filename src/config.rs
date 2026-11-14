@@ -188,9 +188,10 @@ Examples:
   ctfdc tui --cutoff 10    Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
   ctfdc tui --demo         Try it on fictional data
 
-Three views: Board (standings, graph, latest solves), Analysis (you vs a
-rival: gaps, momentum, catch-up targets, categories, your edge) and Plan
-(what to solve next).  Tab switches and ? lists all keys.
+Four views: Board (standings, graph, latest solves), Analysis (you vs a
+rival: gaps, momentum, catch-up targets, categories, your edge), Plan
+(what to solve next) and Challenges (read, download, submit flags).  Tab
+switches and ? lists all keys.
 
 The same in your browser: ctfdc web"
     )]
@@ -213,8 +214,9 @@ Examples:
   ctfdc web -n 5 --top 5   Refresh every 5 seconds, graph the top 5
   ctfdc web --cutoff 10    Qualifying line under #10 (or set cutoff = 10 in ctfd.toml)
 
-Three tabs: Board (standings, graph, latest solves), Analysis (you vs a
-rival) and Plan (what to solve next).  Press ? on the page for its keys.
+Four tabs: Board (standings, graph, latest solves), Analysis (you vs a
+rival), Plan (what to solve next) and Challenges (read, download, submit
+flags).  Press ? on the page for its keys.
 
 From another machine, forward the port: ssh -L 8080:127.0.0.1:8080 host,
 then run with --port 8080 --no-open and open the printed link.

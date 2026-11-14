@@ -55,7 +55,7 @@ struct Shared {
     commands: mpsc::UnboundedSender<Cmd>,
     sent_wanted: Mutex<Vec<u64>>,
     /// Fetches challenge files; `None` on demo data.
-    downloader: Option<board::Downloader>,
+    workspace: Option<board::Workspace>,
     /// Where downloads report back, with the fetcher's updates.
     updates: mpsc::UnboundedSender<Update>,
 }
@@ -109,7 +109,7 @@ async fn serve(board: Board, args: &WebArgs) -> anyhow::Result<()> {
         source,
         model,
         server,
-        downloader,
+        workspace,
     } = board;
     let wanted = model.wanted_accounts(None);
     let (interval, kind) = (model.interval, model.kind);
@@ -125,7 +125,7 @@ async fn serve(board: Board, args: &WebArgs) -> anyhow::Result<()> {
         snapshot: snapshot_tx,
         commands: cmd_tx,
         sent_wanted: Mutex::new(wanted.clone()),
-        downloader,
+        workspace,
         updates: update_tx.clone(),
     });
 
@@ -189,6 +189,8 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/goal", post(set_goal))
         .route("/sort", post(set_sort))
         .route("/download", post(download))
+        .route("/detail", post(detail))
+        .route("/submit", post(submit))
         .route("/pin", post(set_pin))
         .layer(middleware::from_fn_with_state(shared.clone(), require_key));
 
@@ -413,7 +415,61 @@ async fn download(State(shared): State<Arc<Shared>>, Json(body): Json<DownloadBo
             None => board::model::Download::All,
         }
     };
-    board::request_download(shared.downloader.as_ref(), what, &shared.updates);
+    board::request_download(shared.workspace.as_ref(), what, &shared.updates);
+    StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct DetailBody {
+    id: u64,
+}
+
+/// Fetch a challenge's description and files; they arrive in a later
+/// snapshot.
+async fn detail(State(shared): State<Arc<Shared>>, Json(body): Json<DetailBody>) -> StatusCode {
+    {
+        let mut model = shared.lock();
+        if !model.data.challenges.iter().any(|c| c.id == body.id) {
+            return StatusCode::NOT_FOUND;
+        }
+        if !model.want_detail(body.id) {
+            return StatusCode::NO_CONTENT;
+        }
+    }
+    board::request_detail(shared.workspace.as_ref(), body.id, &shared.updates);
+    StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct SubmitBody {
+    id: u64,
+    flag: String,
+}
+
+/// Send a flag to the CTF.  The answer arrives as a notice and as the
+/// challenge's last attempt in a later snapshot.
+async fn submit(State(shared): State<Arc<Shared>>, Json(body): Json<SubmitBody>) -> StatusCode {
+    let flag = body.flag.trim().to_string();
+    if flag.is_empty() {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    }
+    let challenge = {
+        let model = shared.lock();
+        if model.submitting {
+            return StatusCode::CONFLICT;
+        }
+        match model.data.challenges.iter().find(|c| c.id == body.id) {
+            Some(c) => c.clone(),
+            None => return StatusCode::NOT_FOUND,
+        }
+    };
+    board::request_submit(
+        shared.workspace.as_ref(),
+        Some(challenge),
+        body.id,
+        flag,
+        &shared.updates,
+    );
     StatusCode::ACCEPTED
 }
 

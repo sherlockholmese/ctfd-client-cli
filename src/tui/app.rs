@@ -15,6 +15,8 @@ pub enum View {
     Analysis,
     /// Best targets and the ladder to the top.
     Plan,
+    /// Every challenge: read it, download it, submit its flag.
+    Challenges,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +71,13 @@ pub struct App {
     pub board_state: TableState,
     pub catch_state: TableState,
     pub plan_state: TableState,
+    pub chal_state: TableState,
+    /// Hide the challenges you have solved.
+    pub unsolved_only: bool,
+    /// The flag being typed for the highlighted challenge.
+    pub flag_input: Option<String>,
+    /// Lines the challenge description is scrolled down by.
+    pub detail_scroll: u16,
     pub search: Option<String>,
     last_search: Option<String>,
     sent_wanted: Vec<u64>,
@@ -87,6 +96,10 @@ impl App {
             board_state: TableState::default(),
             catch_state: TableState::default().with_selected(Some(0)),
             plan_state: TableState::default().with_selected(Some(0)),
+            chal_state: TableState::default().with_selected(Some(0)),
+            unsolved_only: false,
+            flag_input: None,
+            detail_scroll: 0,
             search: None,
             last_search: None,
             sent_wanted: Vec::new(),
@@ -106,7 +119,7 @@ impl App {
                 .standings
                 .get(self.selected)
                 .and_then(|e| e.account_id),
-            View::Analysis | View::Plan => None,
+            View::Analysis | View::Plan | View::Challenges => None,
         };
         self.board.wanted_accounts(highlighted)
     }
@@ -183,6 +196,24 @@ impl App {
             self.quit = true;
             return None;
         }
+        if let Some(flag) = self.flag_input.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.flag_input = None,
+                KeyCode::Backspace => {
+                    flag.pop();
+                }
+                KeyCode::Char(c) => flag.push(c),
+                KeyCode::Enter => {
+                    let flag = self.flag_input.take().unwrap_or_default();
+                    let flag = flag.trim();
+                    if let Some(id) = self.challenge_id().filter(|_| !flag.is_empty()) {
+                        return Some(Cmd::Submit(id, flag.to_string()));
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
         if let Some(query) = self.search.as_mut() {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter => {
@@ -198,7 +229,7 @@ impl App {
                 }
                 _ => {}
             }
-            return self.sync_wanted();
+            return self.open_challenge().or_else(|| self.sync_wanted());
         }
         if self.show_help {
             if matches!(
@@ -224,26 +255,47 @@ impl App {
                 let picked = listed.get(self.plan_state.selected().unwrap_or(0))?;
                 return Some(Cmd::Download(Download::One(picked.stat.id)));
             }
+            // Open the highlighted target among the challenges.
+            KeyCode::Char('o') if self.view == View::Plan => {
+                let listed = self.board.plan.listed();
+                if let Some(id) = listed
+                    .get(self.plan_state.selected().unwrap_or(0))
+                    .map(|t| t.stat.id)
+                {
+                    self.unsolved_only = false;
+                    let at = self.challenges().iter().position(|c| c.id == id);
+                    self.chal_state.select(Some(at.unwrap_or(0)));
+                    self.detail_scroll = 0;
+                    self.switch_view(View::Challenges);
+                }
+            }
+            KeyCode::Char('d') if self.view == View::Challenges && !self.board.downloading => {
+                return Some(Cmd::Download(Download::One(self.challenge_id()?)));
+            }
             KeyCode::Tab => self.switch_view(match self.view {
                 View::Board => View::Analysis,
                 View::Analysis => View::Plan,
-                View::Plan => View::Board,
+                View::Plan => View::Challenges,
+                View::Challenges => View::Board,
             }),
             KeyCode::BackTab => self.switch_view(match self.view {
-                View::Board => View::Plan,
+                View::Board => View::Challenges,
                 View::Analysis => View::Board,
                 View::Plan => View::Analysis,
+                View::Challenges => View::Plan,
             }),
             KeyCode::Char('1') => self.switch_view(View::Board),
             KeyCode::Char('2') | KeyCode::Char('a') => self.switch_view(View::Analysis),
             KeyCode::Char('3') | KeyCode::Char('p') => self.switch_view(View::Plan),
+            KeyCode::Char('4') | KeyCode::Char('c') => self.switch_view(View::Challenges),
             _ => match self.view {
                 View::Board => self.board_key(key.code),
                 View::Analysis => self.analysis_key(key.code),
                 View::Plan => self.plan_key(key.code),
+                View::Challenges => self.challenges_key(key.code),
             },
         }
-        self.sync_wanted()
+        self.open_challenge().or_else(|| self.sync_wanted())
     }
 
     fn switch_view(&mut self, view: View) {
@@ -366,6 +418,73 @@ impl App {
             .select(Some((sel + delta).clamp(0, len - 1) as usize));
     }
 
+    /// The challenges the tab lists: all of them, or those left to solve.
+    pub fn challenges(&self) -> Vec<&crate::models::Challenge> {
+        self.board
+            .challenge_list()
+            .into_iter()
+            .filter(|c| !(self.unsolved_only && c.solved_by_me))
+            .collect()
+    }
+
+    /// The highlighted challenge on the Challenges tab.
+    pub fn challenge_id(&self) -> Option<u64> {
+        let list = self.challenges();
+        let i = self.chal_state.selected().unwrap_or(0);
+        list.get(i.min(list.len().saturating_sub(1))).map(|c| c.id)
+    }
+
+    /// Ask for the highlighted challenge's details the first time it is
+    /// shown.
+    fn open_challenge(&mut self) -> Option<Cmd> {
+        if self.view != View::Challenges {
+            return None;
+        }
+        let id = self.challenge_id()?;
+        self.board.want_detail(id).then_some(Cmd::Detail(id))
+    }
+
+    fn challenges_key(&mut self, code: KeyCode) {
+        let len = self.challenges().len() as i64;
+        let step = |app: &mut Self, delta: i64| {
+            if len > 0 {
+                let sel = app.chal_state.selected().unwrap_or(0) as i64;
+                app.chal_state
+                    .select(Some((sel + delta).clamp(0, len - 1) as usize));
+                app.detail_scroll = 0;
+            }
+        };
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => step(self, -1),
+            KeyCode::Down | KeyCode::Char('j') => step(self, 1),
+            KeyCode::Home | KeyCode::Char('g') => step(self, i64::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => step(self, i64::MAX / 2),
+            // The description scrolls a few lines at a time.
+            KeyCode::PageDown => self.detail_scroll = self.detail_scroll.saturating_add(5),
+            KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(5),
+            KeyCode::Char('u') => {
+                let keep = self.challenge_id();
+                self.unsolved_only = !self.unsolved_only;
+                let at = keep.and_then(|id| self.challenges().iter().position(|c| c.id == id));
+                self.chal_state.select(Some(at.unwrap_or(0)));
+                self.detail_scroll = 0;
+            }
+            KeyCode::Char('/') => self.search = Some(String::new()),
+            KeyCode::Char('n') => {
+                if let Some(q) = self.last_search.clone() {
+                    let from = self.chal_state.selected().unwrap_or(0) + 1;
+                    self.jump_to_match(&q, from);
+                }
+            }
+            KeyCode::Char('f') | KeyCode::Enter
+                if !self.board.submitting && self.challenge_id().is_some() =>
+            {
+                self.flag_input = Some(String::new());
+            }
+            _ => {}
+        }
+    }
+
     fn scroll_catch_up(&mut self, delta: i64) {
         let len = self.board.h2h.comparison.catch_up.len() as i64;
         if len == 0 {
@@ -401,6 +520,17 @@ impl App {
     fn jump_to_match(&mut self, query: &str, from: usize) {
         let q = query.to_lowercase();
         if q.is_empty() {
+            return;
+        }
+        if self.view == View::Challenges {
+            let list = self.challenges();
+            let found = (from..list.len())
+                .chain(0..from.min(list.len()))
+                .find(|&i| list[i].name.to_lowercase().contains(&q));
+            if let Some(i) = found {
+                self.chal_state.select(Some(i));
+                self.detail_scroll = 0;
+            }
             return;
         }
         let standings = &self.board.data.standings;

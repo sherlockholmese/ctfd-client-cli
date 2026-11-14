@@ -200,7 +200,7 @@ pub fn find_challenge<'a>(
 }
 
 /// Best-effort: mark `metadata.json` as solved after a correct submission.
-fn mark_local_solved(path: &Path) {
+pub(crate) fn mark_local_solved(path: &Path) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };

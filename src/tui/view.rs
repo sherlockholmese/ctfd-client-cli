@@ -53,6 +53,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         View::Board => render_board(f, body, app),
         View::Analysis => render_analysis(f, body, app),
         View::Plan => render_plan(f, body, app),
+        View::Challenges => render_challenges(f, body, app),
     }
     render_footer(f, footer, app);
     render_notices(f, body, app);
@@ -196,6 +197,8 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         tab("Analysis", View::Analysis),
         Span::raw("   "),
         tab("Plan", View::Plan),
+        Span::raw("   "),
+        tab("Challenges", View::Challenges),
         Span::styled(format!("   {}", app.board.host), theme::muted()),
     ]);
     f.render_widget(Paragraph::new(left), area);
@@ -222,9 +225,23 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let keys: &[(&str, &str)] = if let Some(ref q) = app.search {
+    let keys: &[(&str, &str)] = if let Some(ref flag) = app.flag_input {
         let line = Line::from(vec![
-            Span::styled(" Find team: ", theme::heading()),
+            Span::styled(" Flag: ", theme::heading()),
+            Span::raw(flag.clone()),
+            Span::styled("▏", theme::accent()),
+            Span::styled("   Enter submit   Esc cancel", theme::muted()),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    } else if let Some(ref q) = app.search {
+        let what = if app.view == View::Challenges {
+            " Find challenge: "
+        } else {
+            " Find team: "
+        };
+        let line = Line::from(vec![
+            Span::styled(what, theme::heading()),
             Span::raw(q.clone()),
             Span::styled("▏", theme::accent()),
             Span::styled("   Enter keep   Esc close", theme::muted()),
@@ -252,13 +269,25 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("?", "keys"),
                 ("q", "quit"),
             ],
+            View::Challenges => &[
+                ("↑/↓", "select"),
+                ("f", "submit flag"),
+                ("d", "download"),
+                ("D", "all"),
+                ("u", "unsolved"),
+                ("/", "find"),
+                ("Tab", "board"),
+                ("?", "keys"),
+                ("q", "quit"),
+            ],
             View::Plan => &[
                 ("<-/->", "goal"),
                 ("↑/↓", "targets"),
                 ("s", "order"),
+                ("o", "open"),
                 ("d", "download"),
                 ("D", "all"),
-                ("Tab", "board"),
+                ("Tab", "challenges"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -274,8 +303,8 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     const KEY_W: usize = 15;
-    let rows: [(&str, &str); 23] = [
-        ("Tab, 1, 2, 3", "Switch Board / Analysis / Plan"),
+    let rows: [(&str, &str); 27] = [
+        ("Tab, 1, 2, 3, 4", "Board / Analysis / Plan / Challenges"),
         ("↑/↓, j/k", "Move selection or target list"),
         ("PgUp/PgDn", "Move ten rows"),
         ("Home/End, g/G", "First / last team"),
@@ -290,7 +319,11 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("<-/->, h/l", "Rival one place up / down (Analysis)"),
         ("", "Goal one place up / down (Plan)"),
         ("a", "Analyse the selected team"),
-        ("d", "Download the highlighted target (Plan)"),
+        ("o", "Open the highlighted target in Challenges (Plan)"),
+        ("f, Enter", "Submit a flag for the challenge (Challenges)"),
+        ("u", "Only challenges left to solve (Challenges)"),
+        ("PgUp/PgDn", "Scroll the description (Challenges)"),
+        ("d", "Download the highlighted challenge"),
         ("D", "Download every challenge, as ctfdc dl does"),
         ("r", "Update now"),
         ("q, Ctrl-C", "Quit"),
@@ -2062,6 +2095,186 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
 }
 
 // ----------------------------------------------------------------------
+// Challenges
+// ----------------------------------------------------------------------
+
+/// Width of the challenge list beside its details.
+const CHALLENGE_LIST: u16 = 66;
+
+/// Every challenge on the left; on the right, the highlighted one: what
+/// it says, how to reach it, its files, and the last flag tried.
+fn render_challenges(f: &mut Frame, area: Rect, app: &mut App) {
+    // Owned, so the list's scroll position can be written back below.
+    let list: Vec<crate::models::Challenge> = app.challenges().into_iter().cloned().collect();
+    if app.board.data.challenges.is_empty() {
+        note(f, area, "Challenges aren't visible yet.");
+        return;
+    }
+    let selected = app
+        .chal_state
+        .selected()
+        .unwrap_or(0)
+        .min(list.len().saturating_sub(1));
+    let wide = area.width >= CHALLENGE_LIST + PANEL_GAP + 40;
+    let [list_area, detail_area] = if wide {
+        Layout::horizontal([Constraint::Length(CHALLENGE_LIST), Constraint::Min(0)])
+            .spacing(PANEL_GAP)
+            .areas(area)
+    } else {
+        Layout::vertical([Constraint::Percentage(45), Constraint::Min(0)])
+            .spacing(1)
+            .areas(area)
+    };
+
+    let solved = list.iter().filter(|c| c.solved_by_me).count();
+    let title = if app.unsolved_only {
+        format!("Challenges left to solve ({})", list.len())
+    } else {
+        format!("Challenges ({solved} of {} solved)", list.len())
+    };
+    let inner = titled(f, list_area, &title);
+    let name_w = (inner.width as usize).saturating_sub(2 + 8 + 6 + 6 + 11 + 2 * 4);
+    let rows: Vec<Row> = list
+        .iter()
+        .map(|c| {
+            let state = if c.solved_by_me {
+                Span::styled("solved", theme::positive())
+            } else if app.board.on_disk.contains(&c.id) {
+                Span::styled("on disk", theme::muted())
+            } else {
+                Span::raw("")
+            };
+            // The same columns, in the same order, as on the page.
+            let row = Row::new(vec![
+                Cell::from(fit(&c.name, name_w)),
+                Cell::from(Span::styled(
+                    fit(&c.category, 11),
+                    theme::category(&c.category),
+                )),
+                Cell::from(right(pts(c.value)).style(theme::points())),
+                Cell::from(right(c.solves.map(|n| n.to_string()).unwrap_or_default())),
+                Cell::from(state),
+            ]);
+            if c.solved_by_me {
+                row.style(theme::muted())
+            } else {
+                row
+            }
+        })
+        .collect();
+    let header = header_row(
+        vec![
+            Cell::from("Challenge"),
+            Cell::from("Category"),
+            Cell::from(right("Pts")),
+            Cell::from(right("Solves")),
+            Cell::from(""),
+        ],
+        f.area().height >= AIRY_HEIGHT,
+    );
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(10),
+            Constraint::Length(11),
+            Constraint::Length(6),
+            Constraint::Length(6),
+            Constraint::Length(8),
+        ],
+    )
+    .header(header)
+    .column_spacing(2)
+    .row_highlight_style(theme::selected())
+    .highlight_symbol(Line::styled("▶", theme::accent()))
+    .highlight_spacing(HighlightSpacing::Always);
+    let mut state = app.chal_state;
+    state.select(Some(selected));
+    f.render_stateful_widget(table, inner, &mut state);
+    *app.chal_state.offset_mut() = state.offset();
+
+    let Some(c) = list.get(selected) else {
+        note(f, detail_area, "Nothing left to solve.");
+        return;
+    };
+    let inner = titled(f, detail_area, &fit(&c.name, detail_area.width as usize));
+    let quiet = |text: String| Span::styled(text, theme::muted());
+    let mut meta = vec![
+        Span::styled(c.category.clone(), theme::category(&c.category)),
+        quiet("   ".into()),
+        Span::styled(format!("{} pts", pts(c.value)), theme::points()),
+    ];
+    if let Some(n) = c.solves {
+        meta.push(quiet(format!("   {n} solves")));
+    }
+    if c.solved_by_me {
+        meta.push(Span::styled("   solved", theme::positive()));
+    } else if app.board.on_disk.contains(&c.id) {
+        meta.push(quiet("   on disk".into()));
+    }
+    let mut lines = vec![Line::from(meta).centered(), Line::raw("")];
+    let label = |text: &str| Span::styled(format!("{text:<9}"), theme::muted());
+    match app.board.details.get(&c.id) {
+        Some(info) => {
+            if let Some(ref how) = info.connection_info {
+                lines.push(Line::from(vec![label("Connect"), Span::raw(how.clone())]));
+            }
+            if !info.files.is_empty() {
+                lines.push(Line::from(vec![
+                    label("Files"),
+                    Span::raw(info.files.join(", ")),
+                ]));
+            }
+            if !info.tags.is_empty() {
+                lines.push(Line::from(vec![
+                    label("Tags"),
+                    Span::raw(info.tags.join(", ")),
+                ]));
+            }
+            if let Some(n) = info.max_attempts {
+                lines.push(Line::from(vec![
+                    label("Attempts"),
+                    Span::raw(format!("{n} at most")),
+                ]));
+            }
+        }
+        None => lines.push(Line::from(quiet("Loading…".into()))),
+    }
+    // The last flag tried for this challenge and what the server said.
+    if let Some(attempt) = app.board.attempt.as_ref().filter(|a| a.id == c.id) {
+        lines.push(Line::from(vec![
+            label("Last flag"),
+            Span::styled(
+                attempt.message.clone(),
+                if attempt.solved {
+                    theme::positive()
+                } else {
+                    theme::negative()
+                },
+            ),
+        ]));
+    } else if app.board.submitting {
+        lines.push(Line::from(vec![label("Flag"), quiet("Sending…".into())]));
+    }
+    let head_h = (lines.len() as u16 + 1).min(inner.height);
+    let [head, body] =
+        Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(inner);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), head);
+    if let Some(info) = app.board.details.get(&c.id) {
+        let text = if info.description.trim().is_empty() {
+            Text::styled("No description.", theme::muted())
+        } else {
+            Text::raw(info.description.replace('\r', ""))
+        };
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .scroll((app.detail_scroll, 0)),
+            body,
+        );
+    }
+}
+
+// ----------------------------------------------------------------------
 // Notices
 // ----------------------------------------------------------------------
 
@@ -2085,7 +2298,9 @@ fn render_notices(f: &mut Frame, area: Rect, app: &App) {
             NoticeKind::YourSolve
             | NoticeKind::RankUp
             | NoticeKind::Recovered
-            | NoticeKind::Downloaded => ("+", theme::positive()),
+            | NoticeKind::Downloaded
+            | NoticeKind::FlagAccepted => ("+", theme::positive()),
+            NoticeKind::FlagRejected => ("!", theme::negative()),
             NoticeKind::Downloading => ("↓", theme::muted()),
             NoticeKind::RankDown | NoticeKind::Failed => ("!", theme::negative()),
             NoticeKind::Solve => ("·", theme::muted()),

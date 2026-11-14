@@ -24,6 +24,14 @@ pub struct Snapshot {
     pub error: Option<String>,
     /// Whether challenge files are being downloaded right now.
     pub downloading: bool,
+    /// Whether a flag is with the server right now.
+    pub submitting: bool,
+    /// The last flag sent and what came back.
+    pub attempt: Option<Attempt>,
+    /// Every visible challenge, by category, then cheapest first.
+    pub challenges: Vec<ChallengeRow>,
+    /// Descriptions and files of the challenges opened so far, by ID.
+    pub details: std::collections::BTreeMap<u64, ChallengeDetail>,
     pub standings: Vec<Row>,
     pub lines: Vec<Line>,
     pub feed: Vec<Solve>,
@@ -34,10 +42,39 @@ pub struct Snapshot {
 }
 
 #[derive(Serialize)]
+pub struct Attempt {
+    pub id: u64,
+    pub solved: bool,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct ChallengeRow {
+    pub id: u64,
+    pub name: String,
+    pub category: String,
+    pub value: i64,
+    pub solves: Option<u64>,
+    pub solved: bool,
+    /// Whether it has a folder in the workspace.
+    pub on_disk: bool,
+}
+
+#[derive(Serialize)]
+pub struct ChallengeDetail {
+    pub description: String,
+    pub connection_info: Option<String>,
+    pub files: Vec<String>,
+    pub tags: Vec<String>,
+    pub max_attempts: Option<i64>,
+}
+
+#[derive(Serialize)]
 pub struct Notice {
     pub id: u64,
     /// `your_solve`, `solve`, `rank_up`, `rank_down`, `failed`,
-    /// `recovered`, `downloading` or `downloaded`.
+    /// `recovered`, `downloading`, `downloaded`, `flag_accepted` or
+    /// `flag_rejected`.
     pub kind: &'static str,
     pub title: String,
     pub detail: String,
@@ -561,6 +598,41 @@ impl Snapshot {
             refreshing: model.refreshing,
             error: model.error.clone(),
             downloading: model.downloading,
+            submitting: model.submitting,
+            attempt: model.attempt.as_ref().map(|a| Attempt {
+                id: a.id,
+                solved: a.solved,
+                message: a.message.clone(),
+            }),
+            challenges: model
+                .challenge_list()
+                .into_iter()
+                .map(|c| ChallengeRow {
+                    id: c.id,
+                    name: c.name.clone(),
+                    category: c.category.clone(),
+                    value: c.value,
+                    solves: c.solves,
+                    solved: c.solved_by_me,
+                    on_disk: model.on_disk.contains(&c.id),
+                })
+                .collect(),
+            details: model
+                .details
+                .iter()
+                .map(|(id, d)| {
+                    (
+                        *id,
+                        ChallengeDetail {
+                            description: d.description.clone(),
+                            connection_info: d.connection_info.clone(),
+                            files: d.files.clone(),
+                            tags: d.tags.clone(),
+                            max_attempts: d.max_attempts,
+                        },
+                    )
+                })
+                .collect(),
             standings,
             lines,
             feed,

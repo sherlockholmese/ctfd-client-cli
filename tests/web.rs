@@ -378,6 +378,101 @@ async fn the_page_downloads_challenges_into_the_workspace() {
     assert!(!state.contains("test-token"));
 }
 
+#[tokio::test]
+async fn the_page_reads_challenges_and_submits_flags() {
+    use wiremock::matchers::body_partial_json;
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 3).await;
+    let ok = |data: Value| {
+        ResponseTemplate::new(200).set_body_json(json!({"success": true, "data": data}))
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges/2"))
+        .respond_with(ok(json!({
+            "id": 2, "name": "Baby Pwn", "category": "Pwn", "value": 100,
+            "description": "Smash the <b>stack</b>.", "connection_info": "nc pwn.example 9001",
+            "files": ["/files/aa/baby.tar.gz?token=secret-signature"], "tags": ["easy"]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .and(body_partial_json(
+            json!({"challenge_id": 2, "submission": "flag{right}"}),
+        ))
+        .respond_with(ok(json!({"status": "correct", "message": "Correct"})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .respond_with(ok(json!({"status": "incorrect", "message": "Incorrect"})))
+        .mount(&server)
+        .await;
+    let board = WebBoard::start(&server, &[]).await;
+
+    // The list, in the tab's order, with what is solved.
+    let state = board.state().await;
+    let names: Vec<&str> = state["challenges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Warmup", "Baby Pwn", "Login"]);
+    assert_eq!(state["challenges"][2]["solved"], true);
+    assert_eq!(state["challenges"][1]["on_disk"], false);
+
+    // Details come on request; file URLs are reduced to names.
+    assert_eq!(board.post("detail", json!({"id": 99})).await, 404);
+    assert_eq!(board.post("detail", json!({"id": 2})).await, 202);
+    let mut detail = Value::Null;
+    for _ in 0..100 {
+        detail = board.state().await["details"]["2"].clone();
+        if !detail.is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(detail["description"], "Smash the <b>stack</b>.");
+    assert_eq!(detail["connection_info"], "nc pwn.example 9001");
+    assert_eq!(detail["files"], json!(["baby.tar.gz"]));
+    assert!(!board.state().await.to_string().contains("secret-signature"));
+
+    // A wrong flag, then the right one.
+    assert_eq!(
+        board.post("submit", json!({"id": 2, "flag": "  "})).await,
+        422
+    );
+    assert_eq!(
+        board.post("submit", json!({"id": 99, "flag": "x"})).await,
+        404
+    );
+    assert_eq!(
+        board
+            .post("submit", json!({"id": 2, "flag": "flag{wrong}"}))
+            .await,
+        202
+    );
+    let no = notice(&board, "flag_rejected").await;
+    assert_eq!(no["title"], "Baby Pwn");
+    let state = board.state().await;
+    assert_eq!(state["attempt"]["solved"], false);
+    assert_eq!(state["challenges"][1]["solved"], false);
+
+    assert_eq!(
+        board
+            .post("submit", json!({"id": 2, "flag": " flag{right} "}))
+            .await,
+        202
+    );
+    notice(&board, "flag_accepted").await;
+    let state = board.state().await;
+    assert_eq!(state["attempt"]["id"], 2);
+    assert_eq!(state["attempt"]["solved"], true);
+    assert_eq!(state["challenges"][1]["solved"], true);
+    assert!(!state.to_string().contains("test-token"));
+}
+
 #[test]
 fn web_has_its_own_help_and_no_text_mode() {
     Command::cargo_bin("ctfdc")

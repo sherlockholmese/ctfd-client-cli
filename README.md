@@ -182,7 +182,7 @@ ctfdc web                # the same in your browser
 ctfdc tui --demo         # try either on fictional, simulated data
 ```
 
-Both update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have three tabs (`Tab` switches in the terminal):
+Both update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have four tabs (`Tab` switches in the terminal):
 
 - **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `t` steps the graph's range (all, 24h down to 30m), `l` switches layout (split, graph only, tables only).
 - **Analysis**: you against a rival (the team above you by default; `<-`/`->` changes it). The first two lines say where you stand and what to do: how far behind or ahead you are, your margin to the qualifying line, and how many catch-up challenges it takes to pass them. Below that:
@@ -202,11 +202,14 @@ Both update every 15 seconds (`-n SECS`), keep the last good data on screen if a
 
 Solve times are known for the teams whose solves are tracked: the graphed top N, pinned teams, you and your rival. "Into the CTF" counts from `since` when it is set, else from the earliest solve seen.
 
-Both views can fetch challenge files without leaving the scoreboard: `d` (or **Download** beside the target's name in the browser) downloads the highlighted Plan target, and `D` (the download button in the browser's top bar) downloads every visible challenge. This is `ctfdc dl`: files go to the folder with `ctfd.toml` (else the current folder), attachments already on disk are skipped, and a notification says what was fetched and where. In the browser the download is done by ctfdc on your machine, so the files land in your workspace, not in the browser's downloads.
+- **Challenges** (`4`): every visible challenge, by category, with what you have solved and what is already downloaded to your workspace. `u` keeps only those left to solve and `/` finds one by name. The highlighted challenge shows its description (as plain text), connection details, files and tags.
+  - **Submit a flag**: `f` (or the flag field in the browser), then `Enter`. The server's answer shows beside the challenge and as a notification; an accepted flag counts at once in Plan and Analysis. Rate limits are reported, not waited out: send it again when the server allows. This is `ctfdc s`, so a downloaded copy's `metadata.json` is marked solved too.
+  - **Download**: `d` fetches the highlighted challenge (here or on Plan) and `D` every visible challenge; the browser has a **Download** button beside the challenge and one in the top bar. This is `ctfdc dl`: files go to the folder with `ctfd.toml` (else the current folder), attachments already on disk are skipped, and a notification says what was fetched and where. In the browser the download is done by ctfdc on your machine, so the files land in your workspace, not in the browser's downloads.
+  - On Plan, `o` (or **Open** in the browser) shows the highlighted target here.
 
 Both views show a notification in the bottom right corner when something happens: a new solve (several at once are summed up), your own solve, your rank moving up or down, and an update failing or working again. Each stays for a few seconds.
 
-The browser and the terminal show the same tabs, sections and numbers, laid out the same way, and share their keys: `1` `2` `3` for the tabs, `r` to update now, `/` to find a team, `m`, `<-`/`->`, `t`, `l` as above, and `?` for the list.
+The browser and the terminal show the same tabs, sections and numbers, laid out the same way, and share their keys: `1` `2` `3` `4` for the tabs, `r` to update now, `/` to find a team, `m`, `<-`/`->`, `t`, `l` as above, and `?` for the list.
 
 ### In the browser
 

@@ -18,7 +18,7 @@
 
   const state = {
     snap: null,
-    view: ["analysis", "plan"].includes(params.get("view")) ? params.get("view") : "board",
+    view: ["analysis", "plan", "challenges"].includes(params.get("view")) ? params.get("view") : "board",
     range: "all",
     offset: 0, // server clock minus local clock, seconds
     receivedAt: 0,
@@ -30,6 +30,9 @@
     layout: "split", // board layout: split, graph, table
     seenNotice: 0, // highest notice id already shown
     target: null, // id of the Plan target whose details are shown
+    challenge: null, // id of the challenge open on the Challenges tab
+    unsolvedOnly: false,
+    asked: new Set(), // challenge ids whose details were requested
   };
 
   // ------------------------------------------------------------ theme
@@ -200,7 +203,7 @@
 
   // ------------------------------------------------------------ tabs
 
-  const tabs = [$("tab-board"), $("tab-analysis"), $("tab-plan")];
+  const tabs = [$("tab-board"), $("tab-analysis"), $("tab-plan"), $("tab-challenges")];
   function showView(view, focus) {
     state.view = view;
     if (view !== "analysis") closeCombo(false);
@@ -213,6 +216,7 @@
     $("view-board").hidden = view !== "board";
     $("view-analysis").hidden = view !== "analysis";
     $("view-plan").hidden = view !== "plan";
+    $("view-challenges").hidden = view !== "challenges";
     $("layout").hidden = view !== "board";
     const p = new URLSearchParams(location.hash.slice(1));
     if (view === "board") p.delete("view");
@@ -1479,6 +1483,140 @@
     renderCategoryChart();
   }
 
+  // ------------------------------------------------------------ challenges
+
+  // Every challenge on the left; on the right the picked one: what it
+  // says, how to reach it, its files, and a field for its flag.  The
+  // description is shown as text and never interpreted.
+  function shownChallenges() {
+    const q = $("chal-search").value.trim().toLowerCase();
+    return state.snap.challenges.filter((c) => !(state.unsolvedOnly && c.solved) && (!q || c.name.toLowerCase().includes(q) || c.category.toLowerCase().includes(q)));
+  }
+
+  function pickChallenge(id) {
+    if (state.challenge !== id) {
+      $("flag").value = "";
+      $("chal-scroll").scrollTop = 0;
+    }
+    state.challenge = id;
+    renderChallenges();
+  }
+  function stepChallenge(delta) {
+    const list = shownChallenges();
+    const i = list.findIndex((c) => c.id === state.challenge);
+    const next = list[Math.min(list.length - 1, Math.max(0, i + delta))];
+    if (!next) return;
+    pickChallenge(next.id);
+    document.querySelector("#chal-rows tr.is-picked")?.scrollIntoView({ block: "nearest" });
+  }
+  // From Plan: show a target among the challenges, whatever the filters.
+  function openChallenge(id) {
+    state.unsolvedOnly = false;
+    $("chal-search").value = "";
+    state.challenge = id;
+    showView("challenges");
+    document.querySelector("#chal-rows tr.is-picked")?.scrollIntoView({ block: "center" });
+  }
+  $("open-one").addEventListener("click", () => state.target !== null && openChallenge(state.target));
+  $("chal-search").addEventListener("input", () => state.snap && renderChallenges());
+  $("chal-search").addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && e.currentTarget.value) {
+      e.currentTarget.value = "";
+      renderChallenges();
+    }
+  });
+  $("chal-unsolved").addEventListener("click", () => {
+    state.unsolvedOnly = !state.unsolvedOnly;
+    renderChallenges();
+  });
+  $("chal-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const flag = $("flag").value.trim();
+    if (!flag || state.challenge === null || state.snap?.submitting) return;
+    api("submit", { id: state.challenge, flag }).catch(() => {});
+  });
+
+  function renderChallenges() {
+    const s = state.snap;
+    const any = s.challenges.length > 0;
+    $("chal-empty").hidden = any;
+    $("chal-body").hidden = !any;
+    if (!any) return;
+
+    const list = shownChallenges();
+    const picked = list.find((c) => c.id === state.challenge) ?? list[0] ?? null;
+    state.challenge = picked ? picked.id : null;
+    const solved = s.challenges.filter((c) => c.solved).length;
+    $("chal-title").textContent = `Challenges, ${solved} of ${s.challenges.length} solved`;
+    $("chal-unsolved").setAttribute("aria-pressed", state.unsolvedOnly);
+
+    const stateCell = (c) =>
+      c.solved
+        ? el("span", { class: "state solved" }, icon("check"), "Solved")
+        : c.on_disk
+          ? el("span", { class: "state", title: "Downloaded to your workspace" }, icon("download"), "On disk")
+          : null;
+    const refocus = $("chal-rows").contains(document.activeElement);
+    replace(
+      $("chal-rows"),
+      list.map((c) => {
+        const on = picked && c.id === picked.id;
+        return el(
+          "tr",
+          { class: [on ? "is-picked" : "", c.solved ? "is-solved" : ""].join(" ").trim() || null, onclick: () => pickChallenge(c.id) },
+          el("td", { class: "col-name" }, el("button", { class: "pick chal-name", type: "button", "aria-pressed": on ? "true" : "false", text: c.name, title: c.name })),
+          el("td", { class: "hide-sm col-cat cat", text: c.category }),
+          el("td", { class: "num", text: num(c.value) }),
+          el("td", { class: "num hide-sm col-extra muted", text: c.solves === null ? "" : num(c.solves) }),
+          el("td", { class: "col-state" }, stateCell(c)),
+        );
+      }),
+    );
+    if (refocus) $("chal-rows").querySelector('.pick[aria-pressed="true"]')?.focus();
+    $("chal-none").hidden = list.length > 0;
+    $("chal-none").textContent = state.unsolvedOnly && !$("chal-search").value ? "Everything is solved" : "No match";
+
+    const detail = document.querySelector(".chal-detail");
+    detail.hidden = !picked;
+    if (!picked) return;
+
+    // Details arrive on request, once per challenge.
+    const info = s.details[picked.id];
+    if (!info && !state.asked.has(picked.id)) {
+      state.asked.add(picked.id);
+      api("detail", { id: picked.id }).catch(() => state.asked.delete(picked.id));
+    }
+    $("chal-name").textContent = picked.name;
+    $("chal-meta").textContent = [picked.category, `${num(picked.value)} points`, picked.solves === null ? null : `${num(picked.solves)} ${picked.solves === 1 ? "solve" : "solves"}`, picked.solved ? "solved" : picked.on_disk ? "on disk" : null]
+      .filter(Boolean)
+      .join(", ");
+    const fact = (label, node) => [el("dt", { text: label }), el("dd", null, node)];
+    const facts = [];
+    if (info) {
+      if (info.connection_info) facts.push(...fact("Connect", el("code", { text: info.connection_info })));
+      if (info.files.length) facts.push(...fact("Files", info.files.join(", ")));
+      if (info.tags.length) facts.push(...fact("Tags", info.tags.join(", ")));
+      if (info.max_attempts) facts.push(...fact("Attempts", `${info.max_attempts} at most`));
+    }
+    replace($("chal-facts"), facts);
+    const desc = $("chal-desc");
+    desc.textContent = info ? info.description.trim() || "No description." : "Loading…";
+    desc.classList.toggle("muted", !info || !info.description.trim());
+
+    // The flag field, and what the server said to the last one.
+    const submit = $("flag-submit");
+    submit.disabled = !!s.submitting;
+    submit.setAttribute("aria-busy", !!s.submitting);
+    const attempt = s.attempt && s.attempt.id === picked.id ? s.attempt : null;
+    const line = $("chal-attempt");
+    line.textContent = s.submitting ? "Sending…" : attempt ? attempt.message : "";
+    line.className = `chal-attempt${!s.submitting && attempt ? (attempt.solved ? " good" : " bad") : ""}`;
+    if (attempt && attempt.solved && state.clearedFor !== `${attempt.id}:${attempt.message}`) {
+      state.clearedFor = `${attempt.id}:${attempt.message}`;
+      $("flag").value = "";
+    }
+  }
+
   // ------------------------------------------------------------ layout
 
   // Board layouts, as the terminal's `l`: both, the graph alone, the tables.
@@ -1523,9 +1661,10 @@
   }
   $("pull").addEventListener("click", () => download(null));
   $("download-one").addEventListener("click", () => state.target !== null && download(state.target));
+  $("chal-download").addEventListener("click", () => state.challenge !== null && download(state.challenge));
   function renderDownloads() {
     const busy = !!state.snap.downloading;
-    for (const id of ["pull", "download-one"]) {
+    for (const id of ["pull", "download-one", "chal-download"]) {
       $(id).setAttribute("aria-busy", busy);
       $(id).disabled = busy;
     }
@@ -1544,6 +1683,8 @@
     rank_down: { icon: "fall", tone: "bad" },
     failed: { icon: "alert", tone: "bad" },
     recovered: { icon: "check", tone: "good" },
+    flag_accepted: { icon: "flag", tone: "good" },
+    flag_rejected: { icon: "alert", tone: "bad" },
     downloading: { icon: "download", tone: null },
     downloaded: { icon: "download", tone: "good" },
   };
@@ -1616,10 +1757,14 @@
     if (e.key === "1") showView("board");
     else if (e.key === "2" || e.key === "a") showView("analysis");
     else if (e.key === "3" || e.key === "p") showView("plan");
+    else if (e.key === "4" || e.key === "c") showView("challenges");
     else if (e.key === "?") keysDialog.showModal();
     else if (e.key === "r") refreshBtn.click();
     else if (e.key === "D") download(null);
     else if (e.key === "d" && state.view === "plan" && state.target !== null) download(state.target);
+    else if (e.key === "d" && state.view === "challenges" && state.challenge !== null) download(state.challenge);
+    else if (e.key === "o" && state.view === "plan" && state.target !== null) openChallenge(state.target);
+    else if (e.key === "/" && state.view === "challenges") $("chal-search").focus();
     else if (e.key === "/") {
       if (state.view !== "board") showView("board");
       if (state.layout === "graph") applyLayout("split");
@@ -1634,6 +1779,10 @@
     else if (state.view === "plan" && (e.key === "ArrowDown" || e.key === "j")) stepTarget(1);
     else if (state.view === "plan" && (e.key === "ArrowUp" || e.key === "k")) stepTarget(-1);
     else if (state.view === "plan" && e.key === "s") cycleSort();
+    else if (state.view === "challenges" && (e.key === "ArrowDown" || e.key === "j")) stepChallenge(1);
+    else if (state.view === "challenges" && (e.key === "ArrowUp" || e.key === "k")) stepChallenge(-1);
+    else if (state.view === "challenges" && e.key === "u") $("chal-unsolved").click();
+    else if (state.view === "challenges" && e.key === "f") $("flag").focus();
     else if (e.key === "t" && state.view === "board") cycleRange();
     else if (e.key === "l" && state.view === "board") cycleLayout();
     else handled = false;
@@ -1654,9 +1803,11 @@
     } else if (state.view === "analysis") {
       assignSlots(s.lines);
       renderAnalysis();
-    } else {
+    } else if (state.view === "plan") {
       assignSlots(s.lines);
       renderPlan();
+    } else {
+      renderChallenges();
     }
     if (!s.refreshing) refreshBtn.removeAttribute("aria-busy");
     renderDownloads();
@@ -1723,6 +1874,7 @@
     $("view-board").hidden = true;
     $("view-analysis").hidden = true;
     $("view-plan").hidden = true;
+    $("view-challenges").hidden = true;
   }
 
   showView(state.view);

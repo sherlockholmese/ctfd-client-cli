@@ -211,6 +211,9 @@ button, input, select { font: inherit; color: inherit; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .btn-outline { background: color-mix(in oklab, var(--input) 30%, transparent); }
 }
+.btn-primary { background: var(--primary); color: var(--primary-foreground); box-shadow: var(--shadow-xs); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--primary) 88%, var(--background)); }
+.btn-primary:active:not(:disabled) { background: color-mix(in oklab, var(--primary) 78%, var(--background)); }
 .btn-ghost { color: var(--foreground); }
 .btn-ghost:hover:not(:disabled) { background: var(--accent); }
 .btn-ghost:active:not(:disabled) { background: color-mix(in oklab, var(--accent) 70%, var(--foreground) 6%); }
@@ -758,6 +761,44 @@ tr.on-route .chal-name { font-weight: 600; }
 .chal { display: flex; align-items: baseline; min-width: 0; }
 .why { color: var(--muted-foreground); }
 
+/* ----------------------------------------------------------- challenges */
+
+/* The list beside the picked challenge: what it says, how to reach it,
+   and the flag field under it. */
+#chal-body {
+  display: grid; gap: var(--gap); min-width: 0;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  align-items: start;
+}
+.chal-list { container-type: inline-size; }
+.chal-list .table-scroll { max-height: 560px; }
+.col-state { width: 1%; }
+.state { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted-foreground); white-space: nowrap; }
+.state.solved { color: var(--success); }
+.state .icon { width: 14px; height: 14px; }
+tr.is-solved .pick, tr.is-solved td { color: var(--muted-foreground); }
+
+.chal-detail { min-height: 320px; }
+.chal-head { padding: 20px var(--inset) 8px; display: grid; gap: 4px; flex: none; }
+.chal-head .plan-sub { white-space: normal; }
+.chal-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px var(--inset) 16px; display: grid; gap: 16px; align-content: start; }
+.chal-scroll:focus-visible { outline-offset: -2px; }
+.chal-facts { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 16px; font-size: 13.5px; }
+.chal-facts:empty { display: none; }
+.chal-facts dt { color: var(--muted-foreground); }
+.chal-facts dd { margin: 0; overflow-wrap: anywhere; }
+.chal-facts code { font-family: var(--font-mono); font-size: 13px; }
+/* Shown as the organisers wrote it, as text: never interpreted. */
+.chal-desc { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; line-height: 1.55; }
+.chal-form {
+  flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px 8px; align-items: center;
+}
+.input-flag { width: 100%; padding-left: 10px; font-family: var(--font-mono); font-size: 13px; }
+.chal-attempt { grid-column: 2 / -1; font-size: 13px; min-height: 18px; color: var(--muted-foreground); }
+.chal-attempt.good { color: var(--success); }
+.chal-attempt.bad { color: var(--destructive); }
+
 /* -------------------------------------------------------- notifications */
 
 .toasts {
@@ -849,6 +890,11 @@ kbd {
     .versus-table td, .versus-table th { height: 28px; }
   }
 
+  /* Challenges: the list and the picked one at full height. */
+  #view-challenges { grid-template-rows: minmax(0, 1fr); }
+  #chal-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
+  .chal-list .table-scroll { max-height: none; }
+
   /* Plan: the rail and the answer at full height. */
   #plan-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
   .targets-card .table-scroll { min-height: 0; }
@@ -910,7 +956,8 @@ kbd {
   .standings-card, .feed-card { max-height: none; }
   .standings-card .table-scroll, .feed-card .table-scroll { max-height: 560px; }
   #analysis-body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "versus" "catch" "field" "edge"; }
-  #plan-body { grid-template-columns: minmax(0, 1fr); }
+  #plan-body, #chal-body { grid-template-columns: minmax(0, 1fr); }
+  .chal-scroll { max-height: 420px; }
   .targets-card { order: -1; }
   .targets-card .table-scroll { flex: none; min-height: 0; max-height: 520px; }
 }
@@ -929,6 +976,9 @@ kbd {
   .card-header.row > .row .input-wrap { flex: 1; }
   .combo { flex: 1; min-width: 180px; }
   .select { width: 100%; }
+  .chal-form { grid-template-columns: minmax(0, 1fr) auto; }
+  .chal-form .label { grid-column: 1 / -1; }
+  .chal-attempt { grid-column: 1 / -1; }
   .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px; }
   .rung > :nth-child(5), .rung > :nth-child(7) { display: none; }
   /* The rival picker on the Analysis tab covers this on narrow screens. */

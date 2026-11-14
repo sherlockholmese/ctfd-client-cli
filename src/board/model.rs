@@ -49,6 +49,38 @@ pub enum Update {
         title: String,
         detail: String,
     },
+    /// Which challenges have a folder in the workspace.
+    OnDisk(HashSet<u64>),
+    /// A challenge's description and files arrived (or failed to).
+    Detail(u64, Result<Box<ChallengeInfo>, String>),
+    /// A flag is on its way to the server.
+    Submitting,
+    /// The server answered a flag.
+    Submitted {
+        id: u64,
+        outcome: crate::models::SubmitOutcome,
+        message: String,
+    },
+}
+
+/// What a challenge says beyond the list: fetched when it is opened.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChallengeInfo {
+    pub description: String,
+    pub connection_info: Option<String>,
+    /// Attachment file names.
+    pub files: Vec<String>,
+    pub tags: Vec<String>,
+    pub max_attempts: Option<i64>,
+}
+
+/// The last flag sent for a challenge and what came back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attempt {
+    pub id: u64,
+    /// Accepted, or solved already.
+    pub solved: bool,
+    pub message: String,
 }
 
 /// Which challenges to download.
@@ -68,6 +100,10 @@ pub enum Cmd {
     Accounts(Vec<u64>),
     /// Download challenge files; handled by the view, not the fetcher.
     Download(Download),
+    /// Load a challenge's description and files; likewise.
+    Detail(u64),
+    /// Submit a flag for a challenge; likewise.
+    Submit(u64, String),
 }
 
 /// Teams or users mode, from the scoreboard's `account_type`.
@@ -235,6 +271,10 @@ pub enum NoticeKind {
     Downloading,
     /// It finished.
     Downloaded,
+    /// A flag was accepted.
+    FlagAccepted,
+    /// A flag was turned down.
+    FlagRejected,
 }
 
 impl NoticeKind {
@@ -249,6 +289,8 @@ impl NoticeKind {
             NoticeKind::Recovered => "recovered",
             NoticeKind::Downloading => "downloading",
             NoticeKind::Downloaded => "downloaded",
+            NoticeKind::FlagAccepted => "flag_accepted",
+            NoticeKind::FlagRejected => "flag_rejected",
         }
     }
 }
@@ -429,6 +471,16 @@ pub struct BoardModel {
     pub error: Option<String>,
     /// Whether challenge files are being downloaded right now.
     pub downloading: bool,
+    /// Challenges with a folder in the workspace.
+    pub on_disk: HashSet<u64>,
+    /// Descriptions and files of the challenges opened so far.
+    pub details: HashMap<u64, ChallengeInfo>,
+    /// Challenges whose details are being fetched.
+    pub details_pending: HashSet<u64>,
+    /// Whether a flag is with the server right now.
+    pub submitting: bool,
+    /// The last flag sent and its answer.
+    pub attempt: Option<Attempt>,
 
     pub changes: HashMap<String, Change>,
     /// Standings snapshots (rank, score) covering the change window.
@@ -479,6 +531,11 @@ impl BoardModel {
             refreshing: false,
             error: None,
             downloading: false,
+            on_disk: HashSet::new(),
+            details: HashMap::new(),
+            details_pending: HashSet::new(),
+            submitting: false,
+            attempt: None,
             changes: HashMap::new(),
             snapshots: Default::default(),
             last_moved: HashMap::new(),
@@ -655,6 +712,54 @@ impl BoardModel {
                 };
                 self.notify(kind, title, detail);
             }
+            Update::OnDisk(ids) => self.on_disk = ids,
+            Update::Detail(id, result) => {
+                self.details_pending.remove(&id);
+                match result {
+                    Ok(info) => {
+                        self.details.insert(id, *info);
+                    }
+                    Err(e) => {
+                        let name = self.challenge_name(id);
+                        self.notify(NoticeKind::Failed, format!("Couldn't open {name}"), e);
+                    }
+                }
+            }
+            Update::Submitting => self.submitting = true,
+            Update::Submitted {
+                id,
+                outcome,
+                message,
+            } => {
+                use crate::models::SubmitOutcome;
+                self.submitting = false;
+                let solved = matches!(
+                    outcome,
+                    SubmitOutcome::Accepted | SubmitOutcome::AlreadySolved
+                );
+                let name = self.challenge_name(id);
+                if solved {
+                    // Count it now; the next update confirms it.
+                    if let Some(c) = self.data.challenges.iter_mut().find(|c| c.id == id) {
+                        c.solved_by_me = true;
+                    }
+                    self.rebuild(false);
+                }
+                self.notify(
+                    if solved {
+                        NoticeKind::FlagAccepted
+                    } else {
+                        NoticeKind::FlagRejected
+                    },
+                    name,
+                    message.clone(),
+                );
+                self.attempt = Some(Attempt {
+                    id,
+                    solved,
+                    message,
+                });
+            }
             Update::Account(id, solves) => {
                 self.data.accounts.insert(id, solves);
                 self.rebuild(true);
@@ -684,6 +789,35 @@ impl BoardModel {
                 self.notify_rank(was);
             }
         }
+    }
+
+    fn challenge_name(&self, id: u64) -> String {
+        self.data
+            .challenges
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("challenge {id}"))
+    }
+
+    /// Every visible challenge, as the Challenges tab lists them: by
+    /// category, then cheapest first, then by name.
+    pub fn challenge_list(&self) -> Vec<&Challenge> {
+        let mut list: Vec<&Challenge> = self.data.challenges.iter().collect();
+        list.sort_by(|a, b| {
+            a.category
+                .to_lowercase()
+                .cmp(&b.category.to_lowercase())
+                .then(a.value.cmp(&b.value))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        list
+    }
+
+    /// Note that a challenge's details are wanted; `false` when they are
+    /// already here or on their way.
+    pub fn want_detail(&mut self, id: u64) -> bool {
+        !self.details.contains_key(&id) && self.details_pending.insert(id)
     }
 
     /// Add a notice for the views to show.
