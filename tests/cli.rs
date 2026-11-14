@@ -24,13 +24,14 @@ fn help_lists_aliases_and_examples() {
         .success()
         .stdout(predicate::str::contains("dl"))
         .stdout(predicate::str::contains("lb"))
+        .stdout(predicate::str::contains("tui"))
         .stdout(predicate::str::contains("web"))
         .stdout(predicate::str::contains("Quick start"));
 }
 
 #[test]
 fn subcommand_help_has_examples() {
-    for cmd in ["dl", "s", "ls", "init", "lb", "web"] {
+    for cmd in ["dl", "s", "ls", "init", "lb", "tui", "web"] {
         ctfd()
             .args([cmd, "--help"])
             .assert()

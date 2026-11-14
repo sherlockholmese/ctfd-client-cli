@@ -24,7 +24,8 @@ Running `ctfdc` with no arguments prints this quick start, and every command has
 | `status` | `ls`, `st` | Challenges by category with IDs, solved state and progress |
 | `download` | `dl` | Download challenges and attachments (safe to re-run) |
 | `submit` | `s` | Submit flags by folder, ID, or name |
-| `leaderboard` | `lb`, `scoreboard` | Live scoreboard in the terminal with graph, rival analysis and a plan of what to solve next (`--print` for text) |
+| `leaderboard` | `lb`, `scoreboard` | Print the scoreboard |
+| `tui` | `live` | Live scoreboard in the terminal with graph, rival analysis and a plan of what to solve next |
 | `web` | `ui` | The same in your browser |
 | `completions <SHELL>` | | Shell completion script |
 
@@ -56,7 +57,7 @@ Precedence: `--url`/`--token` > `CTFD_URL`/`CTFD_TOKEN` > nearest `ctfd.toml`. T
 ctfdc init 'https://ctf.example.com/login?token=...'
 ```
 
-`init` recognises rCTF on its own (by its public client config) and saves `platform = "rctf"` with your team token in `ctfd.toml`; `--platform rctf` (or `CTFD_PLATFORM`) forces it. Every command then works the same: `ls`, `dl`, `s`, `lb` and `web`. rCTF challenge and team IDs are strings, so `ctfdc` shows a stable number for each (submit by folder or name as usual). Attachments are downloaded without your token, since rCTF serves them from public storage.
+`init` recognises rCTF on its own (by its public client config) and saves `platform = "rctf"` with your team token in `ctfd.toml`; `--platform rctf` (or `CTFD_PLATFORM`) forces it. Every command then works the same: `ls`, `dl`, `s`, `lb`, `tui` and `web`. rCTF challenge and team IDs are strings, so `ctfdc` shows a stable number for each (submit by folder or name as usual). Attachments are downloaded without your token, since rCTF serves them from public storage.
 
 Tab completion means fewer things to remember:
 
@@ -163,15 +164,25 @@ Exit codes: `0` correct or already solved, `2` incorrect, `1` errors (network, u
 ## Scoreboard
 
 ```sh
-ctfdc lb                 # live scoreboard in the terminal
-ctfdc lb --print         # print once as text (-p; also what you get when piped)
-ctfdc lb --demo          # try the live view on fictional, simulated data
-ctfdc web                # the same scoreboard in your browser
+ctfdc lb                 # print the scoreboard
+ctfdc lb --top 20        # the top 20, and your row
+ctfdc lb --plain         # bare text (-p; also what you get when piped)
+ctfdc lb --demo          # a fictional scoreboard, no server needed
 ```
 
-`ctfdc lb` is the scoreboard in the terminal and `ctfdc web` the same scoreboard in your browser (see [In the browser](#in-the-browser)). They show the same tabs, sections and numbers.
+`ctfdc lb` prints the scoreboard once: rank, team, score and points behind the team above, with your row marked and the qualifying line drawn. On a terminal it is drawn with colour, a score bar per team and a line on where you stand (how far behind the team above, ahead of the team below, and from the qualifying line). Piped, or with `--plain`, it is bare aligned text for scripts. `--color always|never` overrides the choice, and `NO_COLOR` is respected.
 
-Both views update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have three tabs (`Tab` switches in the terminal):
+The live views are their own commands: `ctfdc tui` in the terminal and `ctfdc web` in your browser. They show the same tabs, sections and numbers.
+
+## Live views
+
+```sh
+ctfdc tui                # live scoreboard, analysis and planning in the terminal
+ctfdc web                # the same in your browser
+ctfdc tui --demo         # try either on fictional, simulated data
+```
+
+Both update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have three tabs (`Tab` switches in the terminal):
 
 - **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `t` steps the graph's range (all, 24h down to 30m), `l` switches layout (split, graph only, tables only).
 - **Analysis**: you against a rival (the team above you by default; `<-`/`->` changes it). The first two lines say where you stand and what to do: how far behind or ahead you are, your margin to the qualifying line, and how many catch-up challenges it takes to pass them. Below that:
@@ -205,7 +216,7 @@ ctfdc web --demo                # the same on fictional data
 ctfdc web --port 8080 --no-open # fixed port, print the link instead of opening it
 ```
 
-`ctfdc web` (alias `ui`) is its own command. It takes the scoreboard's options (`-n`, `--top`, `--cutoff`, `--since`, `--demo`) plus where to serve: `--port`, `--bind` and `--no-open`. Where no browser can be opened (over SSH, or on Linux without a desktop session or `xdg-open`) it prints the link for you to open. `ctfdc lb --web` and its `--port`, `--bind` and `--no-open` from earlier versions still work.
+`ctfdc web` (alias `ui`) takes the live views' options (`-n`, `--top`, `--cutoff`, `--since`, `--demo`) plus where to serve: `--port`, `--bind` and `--no-open`. Where no browser can be opened (over SSH, or on Linux without a desktop session or `xdg-open`) it prints the link for you to open. Earlier versions served the page with `ctfdc lb --web`; that is now `ctfdc web`.
 
 The web view shows the same Board, Analysis and Plan as the terminal, with an interactive score graph (hover for everyone's score at that moment, ranges from `All` down to the last `30m`, click a legend entry to hide a line). Hovering a team in the standings highlights its line. `Compare` on any row opens Analysis against that team, and the pin button adds a team outside the top N to the graph. On a desktop-sized window (at least 1024 × 640) each tab fits the window: the page itself never scrolls, only the lists inside it do. Smaller windows stack the same sections and scroll. It follows your system's light/dark setting, and the sun/moon button switches it.
 
@@ -213,13 +224,13 @@ The server listens on `127.0.0.1` only (`--bind ADDR` to change it; ctfdc warns 
 
 ### Qualifying line
 
-Set how many places qualify in `ctfd.toml` and the scoreboard draws the line under that place (live view, Analysis, `--print`, and `--demo`):
+Set how many places qualify in `ctfd.toml` and the scoreboard draws the line under that place (the printed scoreboard, both live views, and `--demo`):
 
 ```toml
 cutoff = 20
 ```
 
-`ctfdc init <url> --cutoff 20` writes it for you, and `--cutoff N` on `ctfdc lb` or `ctfdc web` overrides it for one run. `qualify = 20` is accepted as a synonym.
+`ctfdc init <url> --cutoff 20` writes it for you, and `--cutoff N` on `ctfdc lb`, `tui` or `web` overrides it for one run. `qualify = 20` is accepted as a synonym.
 
 ### Counting points from a set time
 
@@ -230,7 +241,7 @@ since = 2026-11-07T09:00:00+08:00   # without an offset it is local time
 # since = "2026-11-07 09:00"         # strings and Unix seconds work too
 ```
 
-`--since '2026-11-07 09:00'` on `ctfdc lb` or `ctfdc web` overrides it for one run. Ties go to whoever reached the score first, as on CTFd. The re-ranked board is computed from `/api/v1/scoreboard/top/N`, so only accounts CTFd lists on the scoreboard are included.
+`--since '2026-11-07 09:00'` on `ctfdc lb`, `tui` or `web` overrides it for one run. Ties go to whoever reached the score first, as on CTFd. The re-ranked board is computed from `/api/v1/scoreboard/top/N`, so only accounts CTFd lists on the scoreboard are included.
 
 ## Test / Validation
 

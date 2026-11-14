@@ -3,6 +3,7 @@ pub mod init;
 pub mod leaderboard;
 pub mod status;
 pub mod submit;
+pub mod tui;
 pub mod web;
 
 use crate::config::{Commands, ResolvedConfig};
@@ -12,6 +13,7 @@ use crate::config::{Commands, ResolvedConfig};
 pub async fn run_command(config: ResolvedConfig, command: Commands) -> anyhow::Result<()> {
     match command {
         Commands::Leaderboard(args) => leaderboard::run(config, args).await,
+        Commands::Tui(args) => tui::run(config, args).await,
         Commands::Web(args) => web::run(config, args).await,
         Commands::Status(args) => status::run(config, args).await,
         Commands::Download(args) => download::run(config, args).await,

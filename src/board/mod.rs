@@ -1,4 +1,4 @@
-//! The live scoreboard behind `ctfdc lb` and `ctfdc web`, independent of
+//! The live scoreboard behind `ctfdc tui` and `ctfdc web`, independent of
 //! how it is drawn.
 //!
 //! [`connect`] / [`connect_demo`] load the first snapshot; [`fetch_loop`]
@@ -12,7 +12,7 @@ pub mod model;
 pub mod series;
 
 use crate::client::{CtfdClient, CtfdError};
-use crate::config::{LeaderboardArgs, ResolvedConfig};
+use crate::config::{BoardArgs, ResolvedConfig};
 use crate::models::AccountSolve;
 use model::{AccountKind, BoardModel, Cmd, Data, Update};
 use std::collections::{HashMap, HashSet};
@@ -285,7 +285,7 @@ pub fn request_download(
 }
 
 /// Load the first snapshot from a CTFd server.
-pub async fn connect(config: &ResolvedConfig, args: &LeaderboardArgs) -> anyhow::Result<Board> {
+pub async fn connect(config: &ResolvedConfig, args: &BoardArgs) -> anyhow::Result<Board> {
     let client = CtfdClient::new(config);
     let me = client.get_me().await.ok();
     let downloader = Downloader {
@@ -318,7 +318,7 @@ pub async fn connect(config: &ResolvedConfig, args: &LeaderboardArgs) -> anyhow:
 }
 
 /// Load the first snapshot of the fictional demo CTF.
-pub async fn connect_demo(args: &LeaderboardArgs) -> anyhow::Result<Board> {
+pub async fn connect_demo(args: &BoardArgs) -> anyhow::Result<Board> {
     let world = demo::DemoWorld::new(series::now());
     let data = world.snapshot(args.top, &[]);
     finish(
@@ -337,7 +337,7 @@ async fn finish(
     mut source: Source,
     host: String,
     is_demo: bool,
-    args: &LeaderboardArgs,
+    args: &BoardArgs,
     me_account: Option<u64>,
     me_name: Option<String>,
     data: Data,

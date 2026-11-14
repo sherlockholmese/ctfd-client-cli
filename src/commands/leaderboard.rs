@@ -1,64 +1,128 @@
 use crate::board::series::parse_time;
 use crate::client::{CtfdClient, CtfdError};
-use crate::config::{LeaderboardArgs, ResolvedConfig};
+use crate::config::{ColorChoice, LeaderboardArgs, ResolvedConfig};
 use crate::models::{ScoreboardEntry, TopEntry};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 
-/// Where the scoreboard is shown.
+/// How the scoreboard is printed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    /// The live page, served to the browser (see [`crate::web`]).
-    Web,
-    /// The live full-screen terminal view (see [`crate::tui`]).
-    Tui,
-    /// Printed once as text.
+pub enum Style {
+    /// Bare aligned text, for pipes and scripts.
     Plain,
+    /// Drawn for a terminal: score bars, your row marked, a summary;
+    /// with or without colour.
+    Drawn { color: bool },
 }
 
-/// Pick the view for `args`: text with `--plain` or when the output is
-/// not an interactive terminal, else the terminal view.  The web view is
-/// `ctfdc web`; its former flags here (`--web`, `--port`, `--bind`,
-/// `--no-open`) still select it.
-pub fn choose_view(args: &LeaderboardArgs, interactive: bool) -> View {
-    let default_bind = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
-    if args.plain {
-        View::Plain
-    } else if args.web || args.no_open || args.port != 0 || args.bind != default_bind {
-        View::Web
-    } else if interactive {
-        View::Tui
-    } else {
-        View::Plain
+/// Pick the style: plain with `--plain` or when the output is not a
+/// terminal (unless `--color always` asks for the drawn one), else drawn,
+/// in colour unless `--color never` or `NO_COLOR` says otherwise.
+pub fn choose_style(args: &LeaderboardArgs, terminal: bool, no_color: bool) -> Style {
+    match args.color {
+        _ if args.plain => Style::Plain,
+        ColorChoice::Always => Style::Drawn { color: true },
+        ColorChoice::Never if terminal => Style::Drawn { color: false },
+        ColorChoice::Auto if terminal => Style::Drawn { color: !no_color },
+        _ => Style::Plain,
     }
 }
 
-/// Pick the view for this process.
-pub fn view_here(args: &LeaderboardArgs) -> View {
-    let interactive = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
-    choose_view(args, interactive)
+fn style_here(args: &LeaderboardArgs) -> Style {
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    choose_style(args, std::io::stdout().is_terminal(), no_color)
 }
 
-/// Fill in what the workspace's `ctfd.toml` sets and the flags leave out:
-/// the qualifying line (`cutoff`) and the scoring start (`since`).
-pub fn with_workspace_defaults(mut args: LeaderboardArgs) -> anyhow::Result<LeaderboardArgs> {
+/// Columns to draw in: the terminal's, within reason.
+fn width_here() -> usize {
+    ratatui::crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(100)
+        .clamp(60, 110)
+}
+
+/// What the printed scoreboard shows.
+struct Standings {
+    host: String,
+    entries: Vec<ScoreboardEntry>,
+    /// Index of your row.
+    me: Option<usize>,
+    cutoff: Option<u32>,
+    since: Option<i64>,
+    /// Only this many places (and your row).
+    top: Option<u32>,
+}
+
+/// Print the CTFd scoreboard once.  The qualifying line comes from
+/// `--cutoff`, else `cutoff` in the nearest `ctfd.toml`; the scoring start
+/// time likewise from `--since`, else `since`.
+pub async fn run(config: ResolvedConfig, mut args: LeaderboardArgs) -> anyhow::Result<()> {
     if args.cutoff.is_none() {
         args.cutoff = crate::config::workspace_qualify()?;
     }
     if args.since.is_none() {
         args.since = crate::config::workspace_since()?;
     }
-    Ok(args)
+    let client = CtfdClient::new(&config);
+    let (entries, _) = fetch_standings(&client, args.since).await?;
+    let me = match entries.is_empty() {
+        true => None,
+        false => client.get_me().await.ok(),
+    };
+    let mine = |e: &ScoreboardEntry| match (&me, e.account_type.as_deref()) {
+        (Some(me), Some("user")) => e.account_id.is_some() && e.account_id == me.id,
+        (Some(me), _) => e.account_id.is_some() && e.account_id == me.team_id,
+        (None, _) => false,
+    };
+    let host = config
+        .base_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string();
+    print(
+        &Standings {
+            host,
+            me: entries.iter().position(mine),
+            entries,
+            cutoff: args.cutoff,
+            since: args.since,
+            top: args.top,
+        },
+        style_here(&args),
+    );
+    Ok(())
 }
 
-/// Show the CTFd scoreboard in the terminal, or printed once (see
-/// [`choose_view`]).
-pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Result<()> {
-    let args = with_workspace_defaults(args)?;
-    match view_here(&args) {
-        View::Web => crate::web::run(config, args).await,
-        View::Tui => crate::tui::run(config, args).await,
-        View::Plain => run_plain(config, args.cutoff, args.since).await,
+/// Print a fictional scoreboard, the one the live views' `--demo` shows.
+pub fn run_demo(mut args: LeaderboardArgs) -> anyhow::Result<()> {
+    use crate::board::{demo, series};
+    if args.cutoff.is_none() {
+        args.cutoff = crate::config::workspace_qualify()?;
+    }
+    let entries = demo::DemoWorld::new(series::now())
+        .snapshot(10, &[])
+        .standings;
+    print(
+        &Standings {
+            host: "demo.ctfd.invalid".into(),
+            me: entries
+                .iter()
+                .position(|e| e.account_id == Some(demo::ME_ID)),
+            entries,
+            cutoff: args.cutoff,
+            since: None,
+            top: args.top,
+        },
+        style_here(&args),
+    );
+    Ok(())
+}
+
+fn print(standings: &Standings, style: Style) {
+    match style {
+        Style::Plain => print!("{}", plain(standings)),
+        Style::Drawn { color } => print!("{}", drawn(standings, color, width_here())),
     }
 }
 
@@ -141,33 +205,70 @@ pub fn rescore(
     (standings, history)
 }
 
-/// Print the scoreboard once: rank, team, score, and points behind the
+/// Group thousands: `12345` -> `12,345`.
+fn grouped(value: i64) -> String {
+    let digits = value.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if value < 0 {
+        out.insert(0, '-');
+    }
+    out
+}
+
+fn text_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
+/// `s` cut to `max` columns, ending in an ellipsis when cut.
+fn fit(s: &str, max: usize) -> String {
+    if text_width(s) <= max {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > max.saturating_sub(1) {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
+/// The rows to show: all of them, or the first `top` and yours.
+fn shown(standings: &Standings) -> Vec<usize> {
+    let n = standings.entries.len();
+    let top = standings.top.map_or(n, |t| (t as usize).min(n));
+    let mut rows: Vec<usize> = (0..top).collect();
+    if let Some(me) = standings.me.filter(|&me| me >= top) {
+        rows.push(me);
+    }
+    rows
+}
+
+/// The scoreboard as bare text: rank, team, score, and points behind the
 /// team above, with your row marked and the qualifying line drawn.
-async fn run_plain(
-    config: ResolvedConfig,
-    cutoff: Option<u32>,
-    since: Option<i64>,
-) -> anyhow::Result<()> {
-    let client = CtfdClient::new(&config);
-    let (entries, _) = fetch_standings(&client, since).await?;
-
-    if let Some(since) = since {
-        println!("Counting points scored since {}.", format_since(since));
+fn plain(standings: &Standings) -> String {
+    use std::fmt::Write;
+    let entries = &standings.entries;
+    let mut out = String::new();
+    if let Some(since) = standings.since {
+        let _ = writeln!(out, "Counting points scored since {}.", format_since(since));
     }
-
     if entries.is_empty() {
-        println!("No leaderboard entries available.");
-        return Ok(());
+        let _ = writeln!(out, "No leaderboard entries available.");
+        return out;
     }
 
-    let me = client.get_me().await.ok();
-    let is_me = |e: &ScoreboardEntry| match (&me, e.account_type.as_deref()) {
-        (Some(me), Some("user")) => e.account_id.is_some() && e.account_id == me.id,
-        (Some(me), _) => e.account_id.is_some() && e.account_id == me.team_id,
-        (None, _) => false,
-    };
-
-    let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
     let rank_w = entries
         .iter()
         .map(|e| e.pos.to_string().len())
@@ -176,7 +277,7 @@ async fn run_plain(
         .max(1);
     let name_w = entries
         .iter()
-        .map(|e| width(&e.name))
+        .map(|e| text_width(&e.name))
         .max()
         .unwrap_or(4)
         .max(4);
@@ -187,16 +288,19 @@ async fn run_plain(
         .unwrap_or(5)
         .max(5);
 
-    println!(
+    let _ = writeln!(
+        out,
         "{:>rank_w$}  Team{}  {:>score_w$}  {:>6}",
         "#",
         " ".repeat(name_w - 4),
         "Score",
         "Behind"
     );
-    for (i, entry) in entries.iter().enumerate() {
-        if cutoff == Some(i as u32) && i > 0 {
-            println!(
+    for i in shown(standings) {
+        let entry = &entries[i];
+        if standings.cutoff == Some(i as u32) && i > 0 {
+            let _ = writeln!(
+                out,
                 "{:─<1$}",
                 format!("── top {i} qualify "),
                 rank_w + name_w + score_w + 14
@@ -213,15 +317,241 @@ async fn run_plain(
                 }
             })
             .unwrap_or_default();
-        let pad = " ".repeat(name_w - width(&entry.name));
-        let marker = if is_me(entry) { "  <- you" } else { "" };
-        println!(
+        let pad = " ".repeat(name_w - text_width(&entry.name));
+        let marker = if standings.me == Some(i) {
+            "  <- you"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            out,
             "{:>rank_w$}  {}{pad}  {:>score_w$}  {:>6}{marker}",
             entry.pos, entry.name, entry.score, behind
         );
     }
+    out
+}
 
-    Ok(())
+/// Score bars are drawn in eighths of a cell.
+const EIGHTHS: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+
+/// A bar `fraction` (0..=1) of `width` cells long.
+fn bar(fraction: f64, width: usize) -> String {
+    let eighths = (fraction.clamp(0.0, 1.0) * (width * 8) as f64).round() as usize;
+    let mut out = "█".repeat(eighths / 8);
+    if !eighths.is_multiple_of(8) {
+        out.push(EIGHTHS[eighths % 8]);
+    }
+    out
+}
+
+/// The scoreboard drawn for a terminal `width` columns wide: a heading, a
+/// score bar per team, the podium and your row picked out, the qualifying
+/// line, and a sentence on where you stand.
+fn drawn(standings: &Standings, color: bool, width: usize) -> String {
+    use std::fmt::Write;
+    let paint = |codes: &str, text: &str| {
+        if color && !codes.is_empty() {
+            format!("\x1b[{codes}m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
+    };
+    const BOLD: &str = "1";
+    const DIM: &str = "2";
+    const YOU: &str = "1;36";
+    const LINE: &str = "33";
+    const GOOD: &str = "32";
+    const BAD: &str = "31";
+
+    let entries = &standings.entries;
+    let noun = match entries.first().and_then(|e| e.account_type.as_deref()) {
+        Some("user") => "players",
+        _ => "teams",
+    };
+    let mut out = String::new();
+    let count = format!("{} {noun}", grouped(entries.len() as i64));
+    let gap = width.saturating_sub(2 + 5 + 2 + text_width(&standings.host) + text_width(&count));
+    let _ = writeln!(
+        out,
+        "\n  {}  {}{}{}",
+        paint(BOLD, "ctfdc"),
+        standings.host,
+        " ".repeat(gap.max(2)),
+        paint(DIM, &count)
+    );
+    if let Some(since) = standings.since {
+        let _ = writeln!(
+            out,
+            "  {}",
+            paint(
+                DIM,
+                &format!("Counting points scored since {}", format_since(since))
+            )
+        );
+    }
+    out.push('\n');
+    if entries.is_empty() {
+        let _ = writeln!(
+            out,
+            "  {}\n",
+            paint(DIM, "Nobody is on the scoreboard yet.")
+        );
+        return out;
+    }
+
+    let rows = shown(standings);
+    let rank_w = entries
+        .iter()
+        .map(|e| e.pos.to_string().len())
+        .max()
+        .unwrap_or(1);
+    let score_w = entries
+        .iter()
+        .map(|e| grouped(e.score).len())
+        .max()
+        .unwrap_or(5)
+        .max(5);
+    let behind_w = 6.max(
+        entries
+            .windows(2)
+            .map(|w| grouped(w[0].score - w[1].score).len())
+            .max()
+            .unwrap_or(0),
+    );
+    // Marker, rank, name, score, behind, bar, with two spaces between.
+    let fixed = 2 + rank_w + 2 + 2 + score_w + 2 + behind_w + 2;
+    let longest = rows
+        .iter()
+        .map(|&i| text_width(&entries[i].name))
+        .max()
+        .unwrap_or(4)
+        + 5;
+    let name_w = longest.clamp(12, 36.min(width.saturating_sub(fixed + 12)).max(12));
+    let bar_w = width.saturating_sub(fixed + name_w).clamp(8, 32);
+    let best = entries.iter().map(|e| e.score).max().unwrap_or(0).max(1) as f64;
+
+    let _ = writeln!(
+        out,
+        "{}",
+        paint(
+            DIM,
+            &format!(
+                "  {:>rank_w$}  {:<name_w$}  {:>score_w$}  {:>behind_w$}",
+                "#", "Team", "Score", "Behind"
+            )
+        )
+    );
+    let mut previous: Option<usize> = None;
+    for &i in &rows {
+        let e = &entries[i];
+        let mine = standings.me == Some(i);
+        if previous.is_some_and(|p| p + 1 != i) {
+            let _ = writeln!(out, "  {}", paint(DIM, &format!("{:>rank_w$}", "⋮")));
+        }
+        if standings.cutoff == Some(i as u32) && i > 0 {
+            let label = format!("── top {i} qualify ");
+            let rule = format!(
+                "{label}{}",
+                "─".repeat((fixed + name_w + bar_w).saturating_sub(text_width(&label) + 2))
+            );
+            let _ = writeln!(out, "  {}", paint(LINE, &rule));
+        }
+        let name = fit(&e.name, if mine { name_w - 5 } else { name_w });
+        let pad = " ".repeat(name_w - text_width(&name) - if mine { 5 } else { 0 });
+        let name = match (mine, i < 3) {
+            (true, _) => format!("{} {}{pad}", paint(YOU, &name), paint(DIM, " you")),
+            (false, true) => format!("{}{pad}", paint(BOLD, &name)),
+            (false, false) => format!("{name}{pad}"),
+        };
+        let behind = match i.checked_sub(1).map(|j| entries[j].score - e.score) {
+            None => String::new(),
+            Some(0) => "tied".into(),
+            Some(gap) => grouped(gap),
+        };
+        let qualifying = standings.cutoff.is_none_or(|n| i < n as usize);
+        let bar_style = match (mine, qualifying) {
+            (true, _) => YOU,
+            (false, true) => "",
+            (false, false) => DIM,
+        };
+        let _ = writeln!(
+            out,
+            "{} {}  {name}  {}  {}  {}",
+            if mine { paint(YOU, "▶") } else { " ".into() },
+            paint(
+                if i < 3 { BOLD } else { DIM },
+                &format!("{:>rank_w$}", e.pos)
+            ),
+            paint(BOLD, &format!("{:>score_w$}", grouped(e.score))),
+            paint(DIM, &format!("{behind:>behind_w$}")),
+            paint(bar_style, &bar(e.score.max(0) as f64 / best, bar_w)),
+        );
+        previous = Some(i);
+    }
+    let hidden = entries.len() - rows.len();
+    if hidden > 0 {
+        let _ = writeln!(
+            out,
+            "  {}",
+            paint(DIM, &format!("and {} more", grouped(hidden as i64)))
+        );
+    }
+
+    // Where you stand, in a sentence.
+    out.push('\n');
+    if let Some(me) = standings.me {
+        let e = &entries[me];
+        let _ = writeln!(
+            out,
+            "  You are {} of {} with {} points.",
+            paint(YOU, &format!("#{}", e.pos)),
+            grouped(entries.len() as i64),
+            paint(BOLD, &grouped(e.score))
+        );
+        let mut gaps = Vec::new();
+        if let Some(above) = me.checked_sub(1).map(|j| &entries[j]) {
+            gaps.push(format!(
+                "{} behind #{} {}",
+                paint(BAD, &grouped(above.score - e.score)),
+                above.pos,
+                fit(&above.name, 28)
+            ));
+        }
+        if let Some(below) = entries.get(me + 1) {
+            gaps.push(format!(
+                "{} ahead of #{} {}",
+                paint(GOOD, &grouped(e.score - below.score)),
+                below.pos,
+                fit(&below.name, 28)
+            ));
+        }
+        if !gaps.is_empty() {
+            let _ = writeln!(out, "  {}.", gaps.join(", "));
+        }
+        if let Some(n) = standings.cutoff.map(|n| n as usize).filter(|&n| n >= 1) {
+            let margin = if me < n {
+                entries.get(n).map(|out_| {
+                    format!(
+                        "  Qualifying by {}.",
+                        paint(GOOD, &grouped(e.score - out_.score))
+                    )
+                })
+            } else {
+                entries.get(n - 1).map(|in_| {
+                    format!(
+                        "  {} short of the top {n}.",
+                        paint(BAD, &grouped(in_.score - e.score))
+                    )
+                })
+            };
+            if let Some(margin) = margin {
+                let _ = writeln!(out, "{margin}");
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// Show a scoring start time in local time, e.g. `2026-11-07 09:00 +08:00`.
@@ -239,33 +569,96 @@ mod tests {
     use crate::models::ScoreEvent;
     use clap::Parser;
 
-    fn view(flags: &[&str], interactive: bool) -> View {
+    fn style(flags: &[&str], terminal: bool, no_color: bool) -> Style {
         let argv = ["ctfdc", "lb"].iter().chain(flags).copied();
         let cli = crate::config::Cli::try_parse_from(argv).unwrap();
         let crate::config::Commands::Leaderboard(args) = cli.command else {
             panic!("not the leaderboard command");
         };
-        choose_view(&args, interactive)
+        choose_style(&args, terminal, no_color)
     }
 
     #[test]
-    fn the_terminal_view_on_a_terminal_and_text_when_piped() {
-        assert_eq!(view(&[], true), View::Tui);
-        assert_eq!(view(&[], false), View::Plain);
-        assert_eq!(view(&["--plain"], true), View::Plain);
+    fn drawn_on_a_terminal_and_plain_when_piped() {
+        assert_eq!(style(&[], true, false), Style::Drawn { color: true });
+        assert_eq!(style(&[], true, true), Style::Drawn { color: false });
+        assert_eq!(style(&[], false, false), Style::Plain);
+        assert_eq!(style(&["--plain"], true, false), Style::Plain);
+        assert_eq!(
+            style(&["--color", "never"], true, false),
+            Style::Drawn { color: false }
+        );
+        assert_eq!(style(&["--color", "never"], false, false), Style::Plain);
+        assert_eq!(
+            style(&["--color", "always"], false, true),
+            Style::Drawn { color: true }
+        );
+    }
+
+    fn board(top: Option<u32>, cutoff: Option<u32>) -> Standings {
+        Standings {
+            host: "ctf.example.com".into(),
+            entries: vec![
+                entry(1, 1, "Alpha", 12_500),
+                entry(2, 2, "Bravo", 9_000),
+                entry(3, 3, "Charlie", 9_000),
+                entry(4, 4, "Delta", 4_000),
+                entry(5, 5, "Echo", 1_250),
+            ],
+            me: Some(3),
+            cutoff,
+            since: None,
+            top,
+        }
     }
 
     #[test]
-    fn the_former_web_flags_still_serve_the_page() {
-        assert_eq!(view(&["--web"], false), View::Web);
-        assert_eq!(view(&["--no-open"], true), View::Web);
-        assert_eq!(view(&["--port", "8080"], false), View::Web);
-        assert_eq!(view(&["--bind", "0.0.0.0"], true), View::Web);
+    fn draws_bars_your_row_the_line_and_where_you_stand() {
+        let text = drawn(&board(None, Some(2)), false, 100);
+        assert!(!text.contains('\x1b'), "no colour asked for");
+        for needle in [
+            "ctfdc  ctf.example.com",
+            "5 teams",
+            "── top 2 qualify ─",
+            "▶ 4  Delta  you",
+            "12,500",
+            "tied",
+            "You are #4 of 5 with 4,000 points.",
+            "5,000 behind #3 Charlie, 2,750 ahead of #5 Echo.",
+            "5,000 short of the top 2.",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?}\n{text}");
+        }
+        // Bars are proportional: the leader's is full, yours about a third.
+        let bar_of = |name: &str| {
+            let line = text
+                .lines()
+                .find(|l| l.contains(name) && l.contains('█'))
+                .unwrap();
+            line.chars().filter(|c| *c == '█').count()
+        };
+        assert_eq!(bar_of("Alpha"), 32);
+        assert_eq!(bar_of("Delta"), 10);
+
+        let coloured = drawn(&board(None, Some(2)), true, 100);
+        assert!(coloured.contains("\x1b[1;36m▶\x1b[0m"));
     }
 
     #[test]
-    fn web_takes_the_board_options_of_the_terminal_view() {
-        let cli = crate::config::Cli::try_parse_from([
+    fn top_keeps_your_row() {
+        let text = drawn(&board(Some(2), None), false, 100);
+        assert!(text.contains("Bravo") && !text.contains("Charlie   "));
+        assert!(text.contains('⋮') && text.contains("Delta  you"));
+        assert!(text.contains("and 2 more"));
+        let bare = plain(&board(Some(2), None));
+        assert_eq!(bare.lines().count(), 4, "{bare}");
+        assert!(bare.contains("Delta") && bare.contains("<- you"));
+    }
+
+    #[test]
+    fn live_views_take_their_own_options() {
+        use crate::config::{Cli, Commands};
+        let cli = Cli::try_parse_from([
             "ctfdc",
             "web",
             "--port",
@@ -275,17 +668,30 @@ mod tests {
             "5",
             "--top",
             "3",
-            "--cutoff",
-            "8",
         ])
         .unwrap();
-        let crate::config::Commands::Web(args) = cli.command else {
+        let Commands::Web(web) = cli.command else {
             panic!("not the web command");
         };
-        let args = LeaderboardArgs::from(args);
-        assert_eq!((args.port, args.no_open), (8080, true));
-        assert_eq!((args.interval, args.top, args.cutoff), (5, 3, Some(8)));
-        assert_eq!(choose_view(&args, false), View::Web);
+        assert_eq!((web.port, web.no_open), (8080, true));
+        assert_eq!((web.board.interval, web.board.top), (5, 3));
+
+        let cli = Cli::try_parse_from(["ctfdc", "tui", "--cutoff", "8", "--demo"]).unwrap();
+        let Commands::Tui(tui) = cli.command else {
+            panic!("not the tui command");
+        };
+        assert_eq!((tui.board.cutoff, tui.board.demo), (Some(8), true));
+
+        // The printed scoreboard is not a live view: none of their options.
+        for flags in [
+            &["--web"][..],
+            &["--port", "1"],
+            &["-n", "5"],
+            &["--no-open"],
+        ] {
+            let argv = ["ctfdc", "lb"].iter().chain(flags).copied();
+            assert!(Cli::try_parse_from(argv).is_err(), "{flags:?}");
+        }
     }
 
     fn entry(pos: i64, id: u64, name: &str, score: i64) -> ScoreboardEntry {

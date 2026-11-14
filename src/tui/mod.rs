@@ -1,4 +1,4 @@
-//! Live full-screen scoreboard (`ctfdc lb`).
+//! Live full-screen scoreboard (`ctfdc tui`).
 //!
 //! A background task fetches CTFd data on an interval (or on demand) and
 //! sends it to the UI loop, which redraws a few times per second.  The
@@ -10,7 +10,7 @@ mod view;
 
 use crate::board::model::{Cmd, Update};
 use crate::board::{self, Board};
-use crate::config::{LeaderboardArgs, ResolvedConfig};
+use crate::config::{BoardArgs, ResolvedConfig};
 use app::App;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use std::io::IsTerminal;
@@ -22,25 +22,25 @@ fn ensure_terminal() -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!(
-            "The terminal scoreboard needs an interactive terminal. Use `ctfdc lb --plain` \
-             for text or `ctfdc web` for the page."
+            "The live terminal view needs an interactive terminal. Use `ctfdc lb` to print \
+             the scoreboard or `ctfdc web` for the page."
         )
     }
 }
 
 /// Run the live scoreboard against a CTFd server.
-pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Result<()> {
+pub async fn run(config: ResolvedConfig, args: BoardArgs) -> anyhow::Result<()> {
     ensure_terminal()?;
     start(board::connect(&config, &args).await?, &args).await
 }
 
 /// Run the live scoreboard on fictional, simulated data.
-pub async fn run_demo(args: LeaderboardArgs) -> anyhow::Result<()> {
+pub async fn run_demo(args: BoardArgs) -> anyhow::Result<()> {
     ensure_terminal()?;
     start(board::connect_demo(&args).await?, &args).await
 }
 
-async fn start(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
+async fn start(board: Board, args: &BoardArgs) -> anyhow::Result<()> {
     let app = App::new(board.model);
     let downloader = board.downloader;
     let (update_tx, update_rx) = mpsc::unbounded_channel::<Update>();

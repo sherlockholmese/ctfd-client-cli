@@ -13,7 +13,7 @@ mod snapshot;
 
 use crate::board::model::{BoardModel, Cmd, Update};
 use crate::board::{self, Board};
-use crate::config::{LeaderboardArgs, ResolvedConfig};
+use crate::config::{ResolvedConfig, WebArgs};
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -88,16 +88,16 @@ impl Shared {
 }
 
 /// Serve the live scoreboard for a CTFd server.
-pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Result<()> {
-    serve(board::connect(&config, &args).await?, &args).await
+pub async fn run(config: ResolvedConfig, args: WebArgs) -> anyhow::Result<()> {
+    serve(board::connect(&config, &args.board).await?, &args).await
 }
 
 /// Serve the live scoreboard on fictional, simulated data.
-pub async fn run_demo(args: LeaderboardArgs) -> anyhow::Result<()> {
-    serve(board::connect_demo(&args).await?, &args).await
+pub async fn run_demo(args: WebArgs) -> anyhow::Result<()> {
+    serve(board::connect_demo(&args.board).await?, &args).await
 }
 
-async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
+async fn serve(board: Board, args: &WebArgs) -> anyhow::Result<()> {
     let addr = SocketAddr::new(args.bind, args.port);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -130,7 +130,13 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
     });
 
     let fetcher = tokio::spawn(board::fetch_loop(
-        source, args.top, interval, kind, wanted, cmd_rx, update_tx,
+        source,
+        args.board.top,
+        interval,
+        kind,
+        wanted,
+        cmd_rx,
+        update_tx,
     ));
     let applier = {
         let shared = shared.clone();
