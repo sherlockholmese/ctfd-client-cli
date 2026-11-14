@@ -18,14 +18,13 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Init(args) => return commands::init::run(&cli.global_args, args).await,
         Commands::Leaderboard(ref args) if args.demo => {
-            let mut args = args.clone();
-            if args.cutoff.is_none() {
-                args.cutoff = config::workspace_qualify()?;
-            }
-            if args.web {
-                return web::run_demo(args).await;
-            }
-            return tui::run_demo(args).await;
+            return commands::leaderboard::run_demo(args.clone());
+        }
+        Commands::Tui(ref args) if args.board.demo => {
+            return commands::tui::run_demo(args.clone()).await;
+        }
+        Commands::Web(ref args) if args.board.demo => {
+            return commands::web::run_demo(args.clone()).await;
         }
         Commands::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "ctfdc", &mut std::io::stdout());

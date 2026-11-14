@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::canvas::{Canvas, Context, Line as CanvasLine};
 use ratatui::widgets::{
     Axis, Block, Cell, Chart, Clear, Dataset, GraphType, HighlightSpacing, LegendPosition,
-    Paragraph, Row, Table, Wrap,
+    Paragraph, Row, Table, TableState, Wrap,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -53,8 +53,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
         View::Board => render_board(f, body, app),
         View::Analysis => render_analysis(f, body, app),
         View::Plan => render_plan(f, body, app),
+        View::Challenges => render_challenges(f, body, app),
     }
     render_footer(f, footer, app);
+    render_notices(f, body, app);
     if app.show_help {
         render_help(f, area);
     }
@@ -195,6 +197,8 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         tab("Analysis", View::Analysis),
         Span::raw("   "),
         tab("Plan", View::Plan),
+        Span::raw("   "),
+        tab("Challenges", View::Challenges),
         Span::styled(format!("   {}", app.board.host), theme::muted()),
     ]);
     f.render_widget(Paragraph::new(left), area);
@@ -221,9 +225,23 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let keys: &[(&str, &str)] = if let Some(ref q) = app.search {
+    let keys: &[(&str, &str)] = if let Some(ref flag) = app.flag_input {
         let line = Line::from(vec![
-            Span::styled(" Find team: ", theme::heading()),
+            Span::styled(" Flag: ", theme::heading()),
+            Span::raw(flag.clone()),
+            Span::styled("▏", theme::accent()),
+            Span::styled("   Enter submit   Esc cancel", theme::muted()),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    } else if let Some(ref q) = app.search {
+        let what = if app.view == View::Challenges {
+            " Find challenge: "
+        } else {
+            " Find team: "
+        };
+        let line = Line::from(vec![
+            Span::styled(what, theme::heading()),
             Span::raw(q.clone()),
             Span::styled("▏", theme::accent()),
             Span::styled("   Enter keep   Esc close", theme::muted()),
@@ -237,6 +255,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("m", "you"),
                 ("/", "find"),
                 ("Enter", "graph team"),
+                ("t", "range"),
                 ("l", "layout"),
                 ("Tab", "analysis"),
                 ("?", "keys"),
@@ -250,9 +269,25 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("?", "keys"),
                 ("q", "quit"),
             ],
-            View::Plan => &[
-                ("↑/↓", "targets"),
+            View::Challenges => &[
+                ("↑/↓", "select"),
+                ("f", "submit flag"),
+                ("d", "download"),
+                ("D", "all"),
+                ("u", "unsolved"),
+                ("/", "find"),
                 ("Tab", "board"),
+                ("?", "keys"),
+                ("q", "quit"),
+            ],
+            View::Plan => &[
+                ("<-/->", "goal"),
+                ("↑/↓", "targets"),
+                ("s", "order"),
+                ("o", "open"),
+                ("d", "download"),
+                ("D", "all"),
+                ("Tab", "challenges"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -268,18 +303,28 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     const KEY_W: usize = 15;
-    let rows: [(&str, &str); 17] = [
-        ("Tab, 1, 2, 3", "Switch Board / Analysis / Plan"),
-        ("↑/↓, j/k", "Move selection or catch-up list"),
+    let rows: [(&str, &str); 27] = [
+        ("Tab, 1, 2, 3, 4", "Board / Analysis / Plan / Challenges"),
+        ("↑/↓, j/k", "Move selection or target list"),
         ("PgUp/PgDn", "Move ten rows"),
         ("Home/End, g/G", "First / last team"),
         ("m", "Jump to you (Board)"),
         ("", "Rival = team above you (Analysis)"),
+        ("", "Goal = the default one (Plan)"),
         ("/", "Find a team (n: next match)"),
         ("Enter", "Add or remove team on the graph"),
+        ("s", "Order targets: likely, per hour, odds ... (Plan)"),
+        ("t", "Graph range: all, 24h ... 30m"),
         ("l", "Board layout: split, graph, table"),
-        ("<-/->, h/l", "Rival one place up / down"),
+        ("<-/->, h/l", "Rival one place up / down (Analysis)"),
+        ("", "Goal one place up / down (Plan)"),
         ("a", "Analyse the selected team"),
+        ("o", "Open the highlighted target in Challenges (Plan)"),
+        ("f, Enter", "Submit a flag for the challenge (Challenges)"),
+        ("u", "Only challenges left to solve (Challenges)"),
+        ("PgUp/PgDn", "Scroll the description (Challenges)"),
+        ("d", "Download the highlighted challenge"),
+        ("D", "Download every challenge, as ctfdc dl does"),
         ("r", "Update now"),
         ("q, Ctrl-C", "Quit"),
         ("", ""),
@@ -501,7 +546,7 @@ fn render_standings(f: &mut Frame, area: Rect, app: &mut App) {
 /// Draw the score graph.  The standings swatches act as the legend, so a
 /// separate legend is only drawn when the graph is shown alone.
 fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
-    let inner = titled(f, area, "Score over time");
+    let inner = titled(f, area, &graph_title(app));
 
     if app.board.lines.iter().all(|l| l.points.len() <= 2) {
         note(
@@ -512,28 +557,46 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
         return;
     }
 
-    let x0 = app
+    let first = app
         .board
         .lines
         .iter()
         .filter_map(|l| l.points.first().map(|p| p.0))
         .fold(f64::MAX, f64::min);
+    // With a range picked, start that long ago and from the lowest score
+    // then, so the recent climb fills the graph.
+    let x0 = match app.range.secs() {
+        Some(secs) => first.max((app.board.now - secs) as f64),
+        None => first,
+    };
     let x1 = (app.board.now as f64).max(x0 + 60.0);
-    let y1 = app
+    let windowed: Vec<Vec<(f64, f64)>> = app
         .board
         .lines
         .iter()
-        .flat_map(|l| l.points.iter().map(|p| p.1))
+        .map(|l| window(&l.points, x0))
+        .collect();
+    let y1 = windowed
+        .iter()
+        .flat_map(|l| l.iter().map(|p| p.1))
         .fold(0.0, f64::max)
         .max(1.0)
         * 1.08;
+    let y0 = match app.range.secs() {
+        Some(_) => windowed
+            .iter()
+            .filter_map(|l| l.first().map(|p| p.1))
+            .fold(y1, f64::min),
+        None => 0.0,
+    };
 
     let names_w = (inner.width / 4).clamp(10, 22) as usize;
     let datasets: Vec<Dataset> = app
         .board
         .lines
         .iter()
-        .map(|l| {
+        .zip(&windowed)
+        .map(|(l, points)| {
             let name = if l.is_me {
                 format!("{} (you)", fit(&l.name, names_w.saturating_sub(6)))
             } else {
@@ -549,7 +612,7 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
                 .marker(Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(style)
-                .data(&l.points)
+                .data(points)
         })
         .collect();
 
@@ -559,7 +622,7 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
         .iter()
         .map(|t| Line::styled(local_time(*t as i64, with_date), theme::muted()))
         .collect();
-    let y_labels: Vec<Line> = [0.0, y1 / 2.0, y1]
+    let y_labels: Vec<Line> = [y0, (y0 + y1) / 2.0, y1]
         .iter()
         .map(|v| Line::styled(pts(*v as i64), theme::muted()))
         .collect();
@@ -573,13 +636,32 @@ fn render_graph(f: &mut Frame, area: Rect, app: &App, legend: bool) {
         )
         .y_axis(
             Axis::default()
-                .bounds([0.0, y1])
+                .bounds([y0, y1])
                 .labels(y_labels)
                 .style(theme::muted()),
         )
         .legend_position(legend.then_some(LegendPosition::TopLeft))
         .hidden_legend_constraints((Constraint::Ratio(1, 2), Constraint::Ratio(3, 4)));
     f.render_widget(chart, inner);
+}
+
+fn graph_title(app: &App) -> String {
+    match app.range.label() {
+        Some(label) => format!("Score over time, last {label}"),
+        None => "Score over time".into(),
+    }
+}
+
+/// The part of a step line from `start` on, beginning at the score held
+/// then.
+fn window(points: &[(f64, f64)], start: f64) -> Vec<(f64, f64)> {
+    let cut = points.partition_point(|p| p.0 < start);
+    let mut out = Vec::with_capacity(points.len() - cut + 1);
+    if cut > 0 {
+        out.push((start, points[cut - 1].1));
+    }
+    out.extend_from_slice(&points[cut..]);
+    out
 }
 
 fn render_feed(f: &mut Frame, area: Rect, app: &App) {
@@ -676,12 +758,12 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
             .chain(c.field.iter())
             .map(|t| fit(&t.name, 64).chars().count()),
     );
-    // Pts, Solves, Top N, Category, Challenge, Running + spacing.
-    let left_w = 6 + 6 + 7 + 11 + name_w + 8 + 2 * 5;
+    // Pts, Solves, Top N, Category, Challenge, Rival at, Running + spacing.
+    let left_w = 6 + 6 + 7 + 11 + name_w + 8 + 8 + 2 * 6;
     let side_stack = |f: &mut Frame, side: Rect, app: &mut App| {
         let cats_h = RADAR_HEIGHT.max(app.board.h2h.comparison.categories.len() as u16 + 3);
         let [h2h, _, cats, _, edge] = Layout::vertical([
-            Constraint::Length(8),
+            Constraint::Length(9),
             Constraint::Length(1),
             Constraint::Length(cats_h),
             Constraint::Length(1),
@@ -695,10 +777,10 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
 
     if area.width >= 2 * left_w + SIDE_WIDTH + 2 * PANEL_GAP {
         // Very wide: three columns, each full height.
-        let [catch, field, side] = Layout::horizontal([
-            Constraint::Length(left_w),
-            Constraint::Length(left_w),
+        let [side, catch, field] = Layout::horizontal([
             Constraint::Length(SIDE_WIDTH),
+            Constraint::Length(left_w),
+            Constraint::Length(left_w),
         ])
         .flex(ratatui::layout::Flex::SpaceBetween)
         .spacing(PANEL_GAP)
@@ -707,9 +789,9 @@ fn render_analysis(f: &mut Frame, area: Rect, app: &mut App) {
         render_field(f, field, app, name_w);
         side_stack(f, side, app);
     } else if area.width >= left_w + SIDE_WIDTH + PANEL_GAP {
-        // Wide: catch-up over open challenges, side column on the right.
-        let [main, side] =
-            Layout::horizontal([Constraint::Length(left_w), Constraint::Length(SIDE_WIDTH)])
+        // Wide: the comparison rail, then catch-up over open challenges.
+        let [side, main] =
+            Layout::horizontal([Constraint::Length(SIDE_WIDTH), Constraint::Length(left_w)])
                 .flex(ratatui::layout::Flex::SpaceBetween)
                 .spacing(PANEL_GAP)
                 .areas(rest);
@@ -802,14 +884,14 @@ fn render_verdict(f: &mut Frame, area: Rect, app: &App) {
             match c.gap_closing_index(gap) {
                 Some(i) => vec![
                     Span::styled("To pass: ", theme::muted()),
-                    Span::styled(format!("top {} in Catch up", i + 1), theme::heading()),
+                    Span::styled(format!("top {} catch-up targets", i + 1), theme::heading()),
                     Span::styled(
                         format!("  +{}", pts(c.catch_up[..=i].iter().map(|t| t.value).sum())),
                         theme::positive(),
                     ),
                 ],
                 None => vec![
-                    Span::styled("Catch up is worth ", theme::muted()),
+                    Span::styled("Catch-up targets are worth ", theme::muted()),
                     Span::styled(format!("+{}", pts(c.catch_up_points())), theme::positive()),
                     Span::styled(", not enough on its own", theme::muted()),
                 ],
@@ -843,6 +925,16 @@ fn render_head_to_head(f: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_else(|| "Rival".into());
 
     let mut rows = vec![
+        Row::new(vec![
+            Cell::from("Rank"),
+            Cell::from(right(format!("#{}", me.pos))),
+            Cell::from(right(
+                h.rival
+                    .as_ref()
+                    .map(|r| format!("#{}", r.pos))
+                    .unwrap_or_default(),
+            )),
+        ]),
         Row::new(vec![
             Cell::from("Score"),
             Cell::from(right(pts(me.score)).style(theme::you())),
@@ -878,7 +970,7 @@ fn render_head_to_head(f: &mut Frame, area: Rect, app: &App) {
         ]),
     ];
     if h.rival.is_none() {
-        rows.truncate(2);
+        rows.truncate(3);
     }
     let header = header_row(
         vec![
@@ -903,7 +995,7 @@ fn render_head_to_head(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_catch_up(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
     let h = &app.board.h2h;
-    let inner = titled(f, area, "Catch up");
+    let inner = titled(f, area, "Catch-up targets");
 
     let Some(ref rival) = h.rival else {
         note(f, inner, "Pick a rival: <-/->");
@@ -952,10 +1044,11 @@ fn render_catch_up(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
                 theme::category(&t.category),
             )),
             Cell::from(fit(&t.name, name_w as usize)),
+            Cell::from(right(solved_in(t.at, app.board.plan.start)).style(theme::muted())),
             Cell::from(right(pts(running)).style(theme::muted())),
         ]));
         if closing == Some(i) {
-            rows.push(rule_row("↑ enough to pass".to_string(), 6, 4));
+            rows.push(rule_row("↑ enough to pass".to_string(), 7, 4));
         }
     }
 
@@ -966,6 +1059,7 @@ fn render_catch_up(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             Cell::from(right(top_label)),
             Cell::from("Category"),
             Cell::from("Challenge"),
+            Cell::from(right("Rival at")),
             Cell::from(right("Running")),
         ],
         f.area().height >= AIRY_HEIGHT,
@@ -978,6 +1072,7 @@ fn render_catch_up(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             Constraint::Length(7),
             Constraint::Length(11),
             Constraint::Length(name_w),
+            Constraint::Length(8),
             Constraint::Length(8),
         ],
     )
@@ -1212,7 +1307,7 @@ fn render_field(f: &mut Frame, area: Rect, app: &App, name_w: u16) {
         f,
         area,
         if app.board.h2h.rival.is_some() {
-            "Open for both"
+            "Unsolved by both"
         } else {
             "Open for you"
         },
@@ -1286,6 +1381,7 @@ fn render_edge(f: &mut Frame, area: Rect, app: &App) {
                 Cell::from(right(pts(c.value)).style(theme::positive())),
                 Cell::from(right(c.solves.map(|s| s.to_string()).unwrap_or_default())),
                 Cell::from(Text::from(fit(&c.name, 26))),
+                Cell::from(right(solved_in(c.at, app.board.plan.start)).style(theme::muted())),
             ])
         })
         .collect();
@@ -1294,6 +1390,7 @@ fn render_edge(f: &mut Frame, area: Rect, app: &App) {
             Cell::from(right("Pts")),
             Cell::from(right("Solves")),
             Cell::from("Challenge"),
+            Cell::from(right("You at")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -1303,6 +1400,7 @@ fn render_edge(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Min(10),
+            Constraint::Length(8),
         ],
     )
     .header(header)
@@ -1314,11 +1412,11 @@ fn render_edge(f: &mut Frame, area: Rect, app: &App) {
 // Plan
 // ----------------------------------------------------------------------
 
-/// Best targets against the whole board, the teams to pass on the way to
-/// the top, and the categories with the most likely points.
+/// The goal and how to reach it, the ladder to pick the goal from, and
+/// every open challenge ranked by likely points.
 fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
     let [verdict, _, rest] = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
     ])
@@ -1335,12 +1433,17 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
             .iter()
             .map(|t| fit(&t.stat.name, 64).chars().count()),
     );
-    // Pts, Solved, Category, Challenge (room for the "passes" lines).
-    let main_w = 6 + 6 + 11 + name_w.max(34) + 2 * 4 + 2;
-    let ladder_h = app.board.plan.ladder.len() as u16 + 4;
-    if area.width >= main_w + SIDE_WIDTH + PANEL_GAP {
-        let [main, side] =
-            Layout::horizontal([Constraint::Length(main_w), Constraint::Length(SIDE_WIDTH)])
+    // Step, Pts, Odds, Time, Per hour, Level, Category, Challenge; the
+    // "Why" column takes what is left, up to its full width.
+    let name_w = name_w.max(22);
+    let least_w = 2 + 6 + 5 + 8 + 5 + 7 + 11 + name_w + 2 * 8 + 2;
+    let main_w = least_w + WHY_WIDTH;
+    // The ladder, a blank line, and the two lines on pace.
+    let ladder_h = app.board.plan.ladder.len() as u16 + 4 + 4;
+    if area.width >= least_w + PLAN_SIDE + PANEL_GAP {
+        // The rail first, as on the Analysis tab: pick, then act.
+        let [side, main] =
+            Layout::horizontal([Constraint::Length(PLAN_SIDE), Constraint::Max(main_w)])
                 .flex(ratatui::layout::Flex::SpaceBetween)
                 .spacing(PANEL_GAP)
                 .areas(rest);
@@ -1350,9 +1453,18 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
             Constraint::Min(0),
         ])
         .areas(side);
-        render_targets(f, main, app, name_w);
         render_ladder(f, ladder, app);
         render_focus(f, focus, app);
+        // The list, then everything known about the highlighted target.
+        let facts_h = FACT_ROWS.min(main.height / 2);
+        let [list, _, facts] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(facts_h),
+        ])
+        .areas(main);
+        render_targets(f, list, app, name_w);
+        render_facts(f, facts, app);
     } else {
         let [ladder, _, targets] = Layout::vertical([
             Constraint::Length(ladder_h.min(rest.height / 2)),
@@ -1365,9 +1477,35 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-/// "How far from the top, and what gets you there."
+/// How far into the CTF something was solved, or nothing when unknown.
+fn solved_in(at: Option<i64>, start: i64) -> String {
+    at.map(|t| crate::board::analysis::span_text(t - start))
+        .unwrap_or_default()
+}
+
+/// Width of the Plan rail: the ladder with its marker.
+const PLAN_SIDE: u16 = 58;
+/// Lines given to the highlighted target's details.
+const FACT_ROWS: u16 = 7;
+/// Width of the "Why" column.
+const WHY_WIDTH: u16 = 19;
+
+/// Chance as a whole percentage; anything under half a percent is "<1%".
+fn percent(odds: f64) -> String {
+    if odds > 0.0 && odds < 0.005 {
+        "<1%".into()
+    } else {
+        format!("{:.0}%", odds * 100.0)
+    }
+}
+
+fn solves(n: usize) -> String {
+    format!("{n} {}", if n == 1 { "solve" } else { "solves" })
+}
+
+/// One line: what you aim for and what it takes.
 fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
-    let Some(ref me) = app.board.h2h.me else {
+    if app.board.h2h.me.is_none() {
         note(
             f,
             area,
@@ -1377,47 +1515,46 @@ fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
             ),
         );
         return;
-    };
-    let plan = &app.board.plan;
-    let mut first = vec![
-        Span::styled(format!("#{} {}", me.pos, fit(&me.name, 30)), theme::you()),
-        Span::raw(format!("  {} pts", pts(me.score))),
-    ];
-    let leader = plan.ladder.iter().find(|r| r.pos == 1 && r.ahead >= 0);
-    if let Some(l) = leader {
-        first.push(Span::styled("   |   ", theme::muted()));
-        first.push(Span::styled(
-            format!("{} behind", pts(l.ahead)),
-            theme::negative().add_modifier(Modifier::BOLD),
-        ));
-        first.push(Span::styled(
-            format!(" #1 {}", fit(&l.name, 28)),
-            theme::heading(),
-        ));
     }
+    let plan = &app.board.plan;
+    let goal = plan.goal_rung();
+    let qualifying = |pos: i64| app.board.cutoff.is_some_and(|n| i64::from(n) == pos);
 
-    let open: i64 = plan.targets.iter().map(|t| t.stat.value).sum();
-    let second = match (leader, plan.targets.last()) {
-        (None, _) => vec![Span::styled("You lead.", theme::positive())],
-        (_, None) => vec![Span::styled("Nothing left to solve.", theme::muted())],
-        (Some(l), Some(last)) => match l.to_pass {
-            Some((n, gain)) => vec![
-                Span::styled("To take #1: ", theme::muted()),
-                Span::styled(format!("top {n} targets"), theme::heading()),
-                Span::styled(format!("  +{}", pts(gain)), theme::positive()),
-            ],
-            None => vec![
-                Span::styled("Everything open (", theme::muted()),
-                Span::styled(format!("+{}", pts(open)), theme::positive()),
-                Span::styled(") reaches ", theme::muted()),
-                Span::styled(format!("#{}", last.reach), theme::heading()),
-            ],
-        },
+    let second = match goal {
+        None if plan.targets.is_empty() => {
+            vec![Span::styled("Nothing left to solve.", theme::muted())]
+        }
+        None => vec![Span::styled("You lead the board.", theme::positive())],
+        Some(g) => {
+            let aim = if qualifying(g.pos) {
+                format!("reach top {}", g.pos)
+            } else {
+                format!("pass #{} {}", g.pos, fit(&g.name, 28))
+            };
+            match (g.to_pass, g.route_odds) {
+                (Some((n, gain)), Some(odds)) => vec![
+                    Span::styled(
+                        format!("{} to {aim}", solves(n)),
+                        theme::heading().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("   +{}", pts(gain)), theme::positive()),
+                    Span::styled(
+                        format!(
+                            "   {} chance of landing {}",
+                            percent(odds),
+                            if n == 1 { "it" } else { "all" }
+                        ),
+                        theme::muted(),
+                    ),
+                ],
+                _ => vec![Span::styled(
+                    format!("Not enough open points to {aim}"),
+                    theme::attention(),
+                )],
+            }
+        }
     };
-    f.render_widget(
-        Paragraph::new(vec![Line::from(first), Line::from(second)]).centered(),
-        area,
-    );
+    f.render_widget(Paragraph::new(Line::from(second)).centered(), area);
 }
 
 fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
@@ -1435,51 +1572,109 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
         );
         return;
     }
-    // Most likely points first; a line after each solve that overtakes
-    // someone.
+    // The route to the goal first, in the order to try it, closed by a
+    // line; then everything else, most likely points first.
+    let route = plan.route();
+    let rest = plan.off_route();
+    let sort = plan.sort;
     let selected = app.plan_state.selected().unwrap_or(0);
     let mut selected_row = 0;
     let mut rows: Vec<Row> = Vec::new();
-    for (i, t) in plan.targets.iter().enumerate() {
-        if i == selected {
-            selected_row = rows.len();
-        }
-        rows.push(Row::new(vec![
+    let target_row = |t: &crate::board::analysis::Target, step: Option<usize>| {
+        Row::new(vec![
+            Cell::from(
+                right(step.map(|n| n.to_string()).unwrap_or_default()).style(theme::muted()),
+            ),
             Cell::from(right(pts(t.stat.value)).style(theme::points())),
             Cell::from(
-                right(format!("{:.0}%", t.share * 100.0))
-                    .style(theme::popularity((t.share * 10.0).round() as usize, 10)),
+                right(percent(t.odds))
+                    .style(theme::popularity((t.odds * 10.0).round() as usize, 10)),
             ),
+            // A time guessed from the difficulty is marked and quiet.
+            Cell::from(match t.time {
+                Some(secs) if t.time_guessed => {
+                    right(format!("~{}", crate::board::analysis::span_text(secs)))
+                        .style(theme::muted())
+                }
+                Some(secs) => right(crate::board::analysis::span_text(secs)),
+                None => right("-").style(theme::muted()),
+            }),
+            Cell::from(right(
+                t.per_hour
+                    .map(|r| pts(r.round() as i64))
+                    .unwrap_or_else(|| "-".into()),
+            )),
+            // An organiser's tag reads plainly, an estimate quietly.
+            Cell::from(Span::styled(
+                t.difficulty.level.label(),
+                if t.difficulty.tagged {
+                    theme::text()
+                } else {
+                    theme::muted()
+                },
+            )),
             Cell::from(Span::styled(
                 fit(&t.stat.category, 11),
                 theme::category(&t.stat.category),
             )),
             Cell::from(fit(&t.stat.name, name_w as usize)),
-        ]));
-        if let Some((rank, ref name)) = t.passes {
-            rows.push(rule_row(
-                format!("↑ passes {} for #{rank}", fit(name, 24)),
-                4,
-                3,
-            ));
+            Cell::from(Span::styled(
+                fit(&t.why().unwrap_or_default(), WHY_WIDTH as usize),
+                theme::muted(),
+            )),
+        ])
+    };
+    for (i, t) in route.iter().chain(rest.iter()).enumerate() {
+        if i == selected {
+            selected_row = rows.len();
+        }
+        rows.push(target_row(t, (i < route.len()).then_some(i + 1)));
+        if i + 1 == route.len()
+            && let Some(g) = plan.goal_rung()
+        {
+            let label = if app.board.cutoff.is_some_and(|n| i64::from(n) == g.pos) {
+                format!("↑ top {}, past {}", g.pos, fit(&g.name, 18))
+            } else {
+                format!("↑ passes #{} {}", g.pos, fit(&g.name, 18))
+            };
+            rows.push(rule_row(label, 9, 7));
         }
     }
+    // The column the list is ordered by carries an arrow.
+    use crate::board::analysis::Sort;
+    let sorted = |label: &str, by: Sort| {
+        if sort == by {
+            format!("{label}↓")
+        } else {
+            label.to_string()
+        }
+    };
     let header = header_row(
         vec![
-            Cell::from(right("Pts")),
-            Cell::from(right("Solved")),
+            Cell::from(""),
+            Cell::from(right(sorted("Pts", Sort::Points))),
+            Cell::from(right(sorted("Odds", Sort::Odds))),
+            Cell::from(right(sorted("Time", Sort::Time))),
+            Cell::from(right(sorted("/h", Sort::PerHour))),
+            Cell::from("Level"),
             Cell::from("Category"),
             Cell::from("Challenge"),
+            Cell::from("Why"),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
     let table = Table::new(
         rows,
         [
+            Constraint::Length(2),
             Constraint::Length(6),
-            Constraint::Length(6),
+            Constraint::Length(5),
+            Constraint::Length(8),
+            Constraint::Length(5),
+            Constraint::Length(7),
             Constraint::Length(11),
-            Constraint::Length(name_w.max(34)),
+            Constraint::Length(name_w),
+            Constraint::Max(WHY_WIDTH),
         ],
     )
     .header(header)
@@ -1493,48 +1688,309 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
     *app.plan_state.offset_mut() = state.offset();
 }
 
+/// A share as a filled bar `width` cells long.
+fn meter(n: f64, of: f64, width: usize) -> String {
+    let filled = if of > 0.0 {
+        ((n / of).clamp(0.0, 1.0) * width as f64).round() as usize
+    } else {
+        0
+    };
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// The cell a `fraction` (0..=1) of a `width`-cell track falls in.
+fn cell_at(fraction: f64, width: usize) -> usize {
+    ((fraction.clamp(0.0, 1.0) * (width - 1) as f64).round() as usize).min(width - 1)
+}
+
+/// Everything known about the highlighted target, drawn: a timeline of
+/// its solves, then one small block each for how widely it is solved, your
+/// odds, the time it takes, and who solved it when.
+fn render_facts(f: &mut Frame, area: Rect, app: &App) {
+    use crate::board::analysis::span_text;
+    let plan = &app.board.plan;
+    let listed = plan.listed();
+    let Some(t) = listed.get(app.plan_state.selected().unwrap_or(0)) else {
+        return;
+    };
+    let Some((field, start, ahead_tracked)) = plan.context() else {
+        return;
+    };
+    let now = app.board.now;
+    let quiet = |text: String| Span::styled(text, theme::muted());
+    let [title, timeline, _, blocks] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+
+    // The name, with the difficulty as four steps beside it.
+    let level = t.difficulty.level as usize;
+    f.render_widget(
+        Line::from(vec![
+            Span::styled(fit(&t.stat.name, 40), theme::heading()),
+            Span::raw(format!(
+                "   {}{} ",
+                "■".repeat(level + 1),
+                "□".repeat(3 - level)
+            )),
+            quiet(format!(
+                "{}{}",
+                t.difficulty.level.label(),
+                if t.difficulty.tagged {
+                    ""
+                } else {
+                    ", estimated"
+                }
+            )),
+        ])
+        .centered(),
+        title,
+    );
+
+    // Solves over the CTF: a mark per tracked solve from the start to now,
+    // the last hour drawn dotted.
+    // The words beside the track need about 62 cells.
+    let track = (area.width as usize).saturating_sub(62).clamp(12, 44);
+    let elapsed = (now - start).max(1) as f64;
+    let mut cells: Vec<char> = (0..track)
+        .map(|i| {
+            if (i as f64 + 0.5) / track as f64 >= 1.0 - 3600.0 / elapsed {
+                '┄'
+            } else {
+                '─'
+            }
+        })
+        .collect();
+    for &at in &t.timing.times {
+        cells[cell_at((at - start) as f64 / elapsed, track)] = '●';
+    }
+    let summary = match (t.timing.first(), t.timing.last()) {
+        (Some(first), Some(last)) => format!(
+            "   {} solves   first {} in   latest {} ago",
+            t.timing.times.len(),
+            span_text(first - start),
+            span_text(now - last)
+        ),
+        _ => "   no tracked team has solved it".into(),
+    };
+    f.render_widget(
+        Line::from(vec![
+            quiet("start ".into()),
+            Span::raw(cells.into_iter().collect::<String>()),
+            quiet(" now".into()),
+            quiet(summary),
+        ])
+        .centered(),
+        timeline,
+    );
+
+    // Four blocks side by side, each a quiet heading over three lines.
+    const BAR: usize = 10;
+    let block = |heading: &str, rows: Vec<Line<'static>>| {
+        let mut lines = vec![Line::styled(heading.to_string(), theme::muted())];
+        lines.extend(rows);
+        Paragraph::new(lines)
+    };
+    let [reach_area, odds_area, time_area, who_area] = Layout::horizontal([
+        Constraint::Length(23),
+        Constraint::Length(24),
+        Constraint::Length(23),
+        Constraint::Min(0),
+    ])
+    .spacing(3)
+    .areas(blocks);
+    // The last block only where there is room for a name and a time.
+    let who = who_area.width >= 18;
+
+    let share = |name: &str, n: usize, of: usize| {
+        Line::from(vec![
+            quiet(format!("{name:<7}")),
+            Span::raw(meter(n as f64, of as f64, BAR)),
+            Span::raw(format!(" {n}/{of}")),
+        ])
+    };
+    let mut reach = Vec::new();
+    if let Some(n) = t.stat.solves.filter(|_| field.ranked > 0) {
+        reach.push(share("all", n as usize, field.ranked));
+    }
+    if field.top_n > 0 {
+        reach.push(share(
+            &format!("top {}", field.top_n),
+            t.stat.top_solves,
+            field.top_n,
+        ));
+    }
+    if ahead_tracked > 0 {
+        reach.push(share("ahead", t.ahead, ahead_tracked));
+    }
+    f.render_widget(block("Solved by", reach), reach_area);
+
+    // Your odds: the estimate inside the range it plausibly lies in.
+    const ODDS: usize = 16;
+    let (low, high) = t.odds_range;
+    let mut cells = vec!['░'; ODDS];
+    for cell in &mut cells[cell_at(low, ODDS)..=cell_at(high, ODDS)] {
+        *cell = '▒';
+    }
+    cells[cell_at(t.odds, ODDS)] = '█';
+    let (mine, total) = t.category_record;
+    f.render_widget(
+        block(
+            "Your odds",
+            vec![
+                Line::from(vec![
+                    Span::raw(cells.into_iter().collect::<String>()),
+                    Span::raw(format!(" {}", percent(t.odds))),
+                ]),
+                Line::from(quiet(format!(
+                    "likely {} to {}",
+                    percent(low),
+                    percent(high)
+                ))),
+                Line::from(quiet(format!(
+                    "{}: you {mine}/{total}, field {}",
+                    fit(&t.stat.category, 8),
+                    percent(t.category_share)
+                ))),
+            ],
+        ),
+        odds_area,
+    );
+
+    // Time: shortest to longest as a line, the middle half as a box, the
+    // median as a bar, and your time as an arrow under it.
+    const TIME: usize = 22;
+    let mut time_rows = Vec::new();
+    if let Some(you) = t.time {
+        let spans = t.timing.extent().zip(t.timing.typical());
+        let top = spans.map_or(0, |((_, max), _)| max).max(you) as f64 * 1.08;
+        let at = |secs: i64| cell_at(secs as f64 / top.max(1.0), TIME);
+        let mut cells = vec![' '; TIME];
+        let mut typical = "no solve times yet".to_string();
+        if let Some(((min, max), median)) = spans {
+            for cell in &mut cells[at(min)..=at(max)] {
+                *cell = '─';
+            }
+            if let Some((q1, q3)) = t.timing.spread() {
+                for cell in &mut cells[at(q1)..=at(q3)] {
+                    *cell = '▒';
+                }
+            }
+            cells[at(median)] = '┃';
+            typical = format!("typically {}", span_text(median));
+        }
+        let mut arrow = vec![' '; TIME];
+        arrow[at(you)] = '▲';
+        time_rows.push(Line::raw(cells.into_iter().collect::<String>()));
+        time_rows.push(Line::raw(arrow.into_iter().collect::<String>()));
+        time_rows.push(Line::from(vec![
+            quiet(format!("{typical}, ")),
+            Span::raw(format!(
+                "you {}{}",
+                if t.time_guessed { "~" } else { "" },
+                span_text(you)
+            )),
+        ]));
+    } else {
+        time_rows.push(Line::from(quiet("no solve times yet".into())));
+    }
+    f.render_widget(block("Time taken", time_rows), time_area);
+
+    // Who solved it how far in: the names the timeline cannot carry.
+    if who && !t.timing.times.is_empty() {
+        const SHOWN: usize = 3;
+        let count = t.timing.times.len();
+        let named = if count > SHOWN { SHOWN - 1 } else { count };
+        let mut rows: Vec<Line> = t
+            .timing
+            .solvers
+            .iter()
+            .zip(&t.timing.times)
+            .take(named)
+            .map(|(name, &at)| {
+                Line::from(vec![
+                    Span::raw(format!("{:<12}", fit(name, 11))),
+                    quiet(span_text(at - start)),
+                ])
+            })
+            .collect();
+        if count > named {
+            rows.push(Line::from(quiet(format!("and {} more", count - named))));
+        }
+        f.render_widget(block("Solved at", rows), who_area);
+    }
+}
+
+/// The teams to pass, with the one the route aims at marked.
 fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
-    let inner = titled(f, area, "Path to the top");
+    let inner = titled(f, area, "Aim for");
     let Some(ref me) = app.board.h2h.me else {
         return;
     };
-    let ladder = &app.board.plan.ladder;
-    let rung = |pos: i64, name: &str, gap: Cell<'static>, hour: Cell<'static>, pass| {
+    let plan = &app.board.plan;
+    let rung = |pos: i64, name: &str, cells: [Cell<'static>; 4]| {
+        let [gap, hour, pass, odds] = cells;
         Row::new(vec![
             Cell::from(right(format!("#{pos}"))),
-            Cell::from(fit(name, 18)),
+            Cell::from(fit(name, 16)),
             gap,
             hour,
             pass,
+            odds,
         ])
     };
+    // Your row carries your pace, to read against theirs.
+    let pace_cell = |pace: Option<f64>| {
+        Cell::from(right(
+            pace.map(|p| pts(p.round() as i64)).unwrap_or_default(),
+        ))
+        .style(theme::muted())
+    };
+    let blank = || {
+        [
+            Cell::from(""),
+            pace_cell(plan.my_pace),
+            Cell::from(""),
+            Cell::from(""),
+        ]
+    };
     let mut rows: Vec<Row> = Vec::new();
+    let mut goal_row = None;
     let mut me_shown = false;
-    for r in ladder {
+    for r in &plan.ladder {
         if !me_shown && r.pos > me.pos {
-            rows.push(you_rung(me, &rung));
+            rows.push(rung(me.pos, &me.name, blank()).style(theme::you()));
             me_shown = true;
         }
+        if Some(r.pos) == plan.goal {
+            goal_row = Some(rows.len());
+        }
         let gap = -r.ahead;
-        let hour = r
-            .momentum
-            .map(|m| Cell::from(right(signed_pts(m.last_hour)).style(theme::signed(m.last_hour))))
-            .unwrap_or_else(|| Cell::from(right("")));
-        let pass = match r.to_pass {
-            Some((n, _)) => Cell::from(right(n.to_string())),
-            None if r.ahead < 0 => Cell::from(""),
-            None => Cell::from(right("-").style(theme::muted())),
+        let hour = pace_cell(r.pace);
+        let (pass, odds) = match (r.to_pass, r.route_odds) {
+            (Some((n, _)), Some(odds)) => (
+                Cell::from(right(solves(n))),
+                Cell::from(right(percent(odds)).style(theme::muted())),
+            ),
+            _ if r.ahead < 0 => (Cell::from(""), Cell::from("")),
+            _ => (Cell::from(right("-").style(theme::muted())), Cell::from("")),
         };
         rows.push(rung(
             r.pos,
             &r.name,
-            Cell::from(right(signed_pts(gap)).style(theme::signed(gap))),
-            hour,
-            pass,
+            [
+                Cell::from(right(signed_pts(gap)).style(theme::signed(gap))),
+                hour,
+                pass,
+                odds,
+            ],
         ));
     }
     if !me_shown {
-        rows.push(you_rung(me, &rung));
+        rows.push(rung(me.pos, &me.name, blank()).style(theme::you()));
     }
     let header = header_row(
         vec![
@@ -1544,8 +2000,9 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
                 crate::board::model::AccountKind::Users => "Player",
             }),
             Cell::from(right("Gap")),
-            Cell::from(right("1 h")),
+            Cell::from(right("Pace")),
             Cell::from(right("To pass")),
+            Cell::from(right("Odds")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -1553,29 +2010,34 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Length(4),
-            Constraint::Length(18),
+            Constraint::Length(16),
             Constraint::Length(7),
             Constraint::Length(6),
-            Constraint::Length(7),
+            Constraint::Length(8),
+            Constraint::Length(5),
         ],
     )
     .header(header)
-    .column_spacing(2);
-    f.render_widget(table, inner);
-}
-
-fn you_rung(
-    me: &crate::board::model::Party,
-    rung: &dyn Fn(i64, &str, Cell<'static>, Cell<'static>, Cell<'static>) -> Row<'static>,
-) -> Row<'static> {
-    rung(
-        me.pos,
-        &me.name,
-        Cell::from(""),
-        Cell::from(""),
-        Cell::from(""),
-    )
-    .style(theme::you())
+    .column_spacing(2)
+    .row_highlight_style(theme::selected())
+    .highlight_symbol(Line::styled("▶", theme::accent()))
+    .highlight_spacing(HighlightSpacing::Always);
+    let rows_h = (plan.ladder.len() as u16 + 3).min(inner.height);
+    let [table_area, _, note_area] = Layout::vertical([
+        Constraint::Length(rows_h),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    let mut state = TableState::default().with_selected(goal_row);
+    f.render_stateful_widget(table, table_area, &mut state);
+    // How often you solve, and whether you are closing on the goal.
+    let note_area = Rect {
+        x: note_area.x + 2,
+        width: note_area.width.saturating_sub(2),
+        ..note_area
+    };
+    note(f, note_area, plan.pace_note());
 }
 
 fn render_focus(f: &mut Frame, area: Rect, app: &App) {
@@ -1594,16 +2056,20 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
                     fit(&c.category, 14),
                     theme::category(&c.category),
                 )),
+                Cell::from(right(format!("{}/{}", c.mine, c.total)).style(theme::muted())),
                 Cell::from(right(c.open.to_string())),
                 Cell::from(right(pts(c.points)).style(theme::points())),
+                Cell::from(right(pts(c.expected.round() as i64))),
             ])
         })
         .collect();
     let header = header_row(
         vec![
             Cell::from("Category"),
+            Cell::from(right("Solved")),
             Cell::from(right("Open")),
             Cell::from(right("Pts")),
+            Cell::from(right("Likely")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -1611,11 +2077,277 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Min(10),
+            Constraint::Length(6),
             Constraint::Length(5),
             Constraint::Length(7),
+            Constraint::Length(6),
         ],
     )
     .header(header)
     .column_spacing(2);
+    // Line up with the ladder above, past its marker column.
+    let inner = Rect {
+        x: inner.x + 2,
+        width: inner.width.saturating_sub(2),
+        ..inner
+    };
     f.render_widget(table, inner);
+}
+
+// ----------------------------------------------------------------------
+// Challenges
+// ----------------------------------------------------------------------
+
+/// Width of the challenge list beside its details.
+const CHALLENGE_LIST: u16 = 52;
+
+/// Every challenge on the left; on the right, the highlighted one: what
+/// it says, how to reach it, its files, and the last flag tried.
+fn render_challenges(f: &mut Frame, area: Rect, app: &mut App) {
+    // Owned, so the list's scroll position can be written back below.
+    let list: Vec<crate::models::Challenge> = app.challenges().into_iter().cloned().collect();
+    if app.board.data.challenges.is_empty() {
+        note(f, area, "Challenges aren't visible yet.");
+        return;
+    }
+    let selected = app
+        .chal_state
+        .selected()
+        .unwrap_or(0)
+        .min(list.len().saturating_sub(1));
+    let wide = area.width >= CHALLENGE_LIST + PANEL_GAP + 40;
+    let [list_area, detail_area] = if wide {
+        Layout::horizontal([Constraint::Length(CHALLENGE_LIST), Constraint::Min(0)])
+            .spacing(PANEL_GAP)
+            .areas(area)
+    } else {
+        Layout::vertical([Constraint::Percentage(45), Constraint::Min(0)])
+            .spacing(1)
+            .areas(area)
+    };
+
+    let solved = list.iter().filter(|c| c.solved_by_me).count();
+    let title = if app.unsolved_only {
+        format!("Challenges left to solve ({})", list.len())
+    } else {
+        format!("Challenges, {solved} of {} solved", list.len())
+    };
+    let inner = titled(f, list_area, &title);
+    let name_w = (inner.width as usize).saturating_sub(2 + 2 + 6 + 7 + 2 * 3);
+    // Grouped by category: a heading with how much of it is solved, then
+    // its challenges, each with one mark for solved or downloaded.
+    let mut rows: Vec<Row> = Vec::new();
+    let mut selected_row = 0;
+    let mut category: Option<&str> = None;
+    for (i, c) in list.iter().enumerate() {
+        if category != Some(c.category.as_str()) {
+            category = Some(c.category.as_str());
+            let all = app
+                .board
+                .data
+                .challenges
+                .iter()
+                .filter(|o| o.category == c.category);
+            let (done, total) = all.fold((0, 0), |(done, total), o| {
+                (done + usize::from(o.solved_by_me), total + 1)
+            });
+            if !rows.is_empty() {
+                rows.push(Row::new(vec![Cell::from("")]));
+            }
+            rows.push(Row::new(vec![
+                Cell::from(""),
+                Cell::from(Span::styled(
+                    fit(&c.category, name_w),
+                    theme::category(&c.category).add_modifier(Modifier::BOLD),
+                )),
+                Cell::from(""),
+                Cell::from(right(format!("{done}/{total}")).style(theme::muted())),
+            ]));
+        }
+        if i == selected {
+            selected_row = rows.len();
+        }
+        let mark = if c.solved_by_me {
+            Span::styled("✓", theme::positive())
+        } else if app.board.on_disk.contains(&c.id) {
+            Span::styled("↓", theme::muted())
+        } else {
+            Span::raw("")
+        };
+        let row = Row::new(vec![
+            Cell::from(mark),
+            Cell::from(fit(&c.name, name_w)),
+            Cell::from(right(c.solves.map(|n| n.to_string()).unwrap_or_default())),
+            Cell::from(right(pts(c.value)).style(theme::points())),
+        ]);
+        rows.push(if c.solved_by_me {
+            row.style(theme::muted())
+        } else {
+            row
+        });
+    }
+    let header = header_row(
+        vec![
+            Cell::from(""),
+            Cell::from("Challenge"),
+            Cell::from(right("Solves")),
+            Cell::from(right("Pts")),
+        ],
+        f.area().height >= AIRY_HEIGHT,
+    );
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(2),
+            Constraint::Min(10),
+            Constraint::Length(6),
+            Constraint::Length(7),
+        ],
+    )
+    .header(header)
+    .column_spacing(2)
+    .row_highlight_style(theme::selected())
+    .highlight_symbol(Line::styled("▶", theme::accent()))
+    .highlight_spacing(HighlightSpacing::Always);
+    let mut state = app.chal_state;
+    state.select(Some(selected_row));
+    f.render_stateful_widget(table, inner, &mut state);
+    *app.chal_state.offset_mut() = state.offset();
+
+    let Some(c) = list.get(selected) else {
+        note(f, detail_area, "Nothing left to solve.");
+        return;
+    };
+    let inner = titled(f, detail_area, &fit(&c.name, detail_area.width as usize));
+    let quiet = |text: String| Span::styled(text, theme::muted());
+    let mut meta = vec![
+        Span::styled(c.category.clone(), theme::category(&c.category)),
+        quiet("   ".into()),
+        Span::styled(format!("{} pts", pts(c.value)), theme::points()),
+    ];
+    if let Some(n) = c.solves {
+        meta.push(quiet(format!("   {n} solves")));
+    }
+    if c.solved_by_me {
+        meta.push(Span::styled("   solved", theme::positive()));
+    } else if app.board.on_disk.contains(&c.id) {
+        meta.push(quiet("   on disk".into()));
+    }
+    let mut lines = vec![Line::from(meta).centered(), Line::raw("")];
+    let label = |text: &str| Span::styled(format!("{text:<9}"), theme::muted());
+    match app.board.details.get(&c.id) {
+        Some(info) => {
+            if let Some(ref how) = info.connection_info {
+                lines.push(Line::from(vec![label("Connect"), Span::raw(how.clone())]));
+            }
+            if !info.files.is_empty() {
+                lines.push(Line::from(vec![
+                    label("Files"),
+                    Span::raw(info.files.join(", ")),
+                ]));
+            }
+            if !info.tags.is_empty() {
+                lines.push(Line::from(vec![
+                    label("Tags"),
+                    Span::raw(info.tags.join(", ")),
+                ]));
+            }
+            if let Some(n) = info.max_attempts {
+                lines.push(Line::from(vec![
+                    label("Attempts"),
+                    Span::raw(format!("{n} at most")),
+                ]));
+            }
+        }
+        None => lines.push(Line::from(quiet("Loading…".into()))),
+    }
+    // The last flag tried for this challenge and what the server said.
+    if let Some(attempt) = app.board.attempt.as_ref().filter(|a| a.id == c.id) {
+        lines.push(Line::from(vec![
+            label("Last flag"),
+            Span::styled(
+                attempt.message.clone(),
+                if attempt.solved {
+                    theme::positive()
+                } else {
+                    theme::negative()
+                },
+            ),
+        ]));
+    } else if app.board.submitting {
+        lines.push(Line::from(vec![label("Flag"), quiet("Sending…".into())]));
+    }
+    let head_h = (lines.len() as u16 + 1).min(inner.height);
+    let [head, body] =
+        Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(inner);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), head);
+    if let Some(info) = app.board.details.get(&c.id) {
+        let text = if info.description.trim().is_empty() {
+            Text::styled("No description.", theme::muted())
+        } else {
+            Text::raw(info.description.replace('\r', ""))
+        };
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .scroll((app.detail_scroll, 0)),
+            body,
+        );
+    }
+}
+
+// ----------------------------------------------------------------------
+// Notices
+// ----------------------------------------------------------------------
+
+/// Notices shown at once.
+const NOTICE_ROWS: usize = 3;
+const NOTICE_WIDTH: u16 = 46;
+
+/// What just happened, stacked in the bottom right corner, newest last.
+fn render_notices(f: &mut Frame, area: Rect, app: &App) {
+    use crate::board::model::NoticeKind;
+    let mut live: Vec<_> = app.board.live_notices().collect();
+    let skip = live.len().saturating_sub(NOTICE_ROWS);
+    live.drain(..skip);
+    if live.is_empty() || area.width < NOTICE_WIDTH + 2 {
+        return;
+    }
+    let text_w = NOTICE_WIDTH as usize - 4;
+    let mut lines: Vec<Line> = Vec::new();
+    for n in &live {
+        let (mark, style) = match n.kind {
+            NoticeKind::YourSolve
+            | NoticeKind::RankUp
+            | NoticeKind::Recovered
+            | NoticeKind::Downloaded
+            | NoticeKind::FlagAccepted => ("+", theme::positive()),
+            NoticeKind::FlagRejected => ("!", theme::negative()),
+            NoticeKind::Downloading => ("↓", theme::muted()),
+            NoticeKind::RankDown | NoticeKind::Failed => ("!", theme::negative()),
+            NoticeKind::Solve => ("·", theme::muted()),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{mark} "), style),
+            Span::styled(fit(&n.title, text_w), theme::heading()),
+        ]));
+        if !n.detail.is_empty() {
+            lines.push(Line::styled(
+                format!("  {}", fit(&n.detail, text_w)),
+                theme::muted(),
+            ));
+        }
+    }
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect {
+        x: area.x + area.width - NOTICE_WIDTH - 1,
+        y: area.y + area.height - height,
+        width: NOTICE_WIDTH,
+        height,
+    };
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Paragraph::new(lines).block(Block::bordered().border_style(theme::muted())),
+        rect,
+    );
 }

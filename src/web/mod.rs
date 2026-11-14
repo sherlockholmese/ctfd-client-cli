@@ -1,4 +1,4 @@
-//! Live scoreboard in the browser (`ctfdc lb --web`).
+//! The scoreboard in the browser (`ctfdc web`).
 //!
 //! Serves a single page plus a small JSON API on a local address.  The
 //! server owns the [`BoardModel`] and does every CTFd request itself, so
@@ -13,7 +13,7 @@ mod snapshot;
 
 use crate::board::model::{BoardModel, Cmd, Update};
 use crate::board::{self, Board};
-use crate::config::{LeaderboardArgs, ResolvedConfig};
+use crate::config::{ResolvedConfig, WebArgs};
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -24,6 +24,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use snapshot::Snapshot;
 use std::convert::Infallible;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
@@ -53,6 +54,10 @@ struct Shared {
     snapshot: watch::Sender<Arc<str>>,
     commands: mpsc::UnboundedSender<Cmd>,
     sent_wanted: Mutex<Vec<u64>>,
+    /// Fetches challenge files; `None` on demo data.
+    workspace: Option<board::Workspace>,
+    /// Where downloads report back, with the fetcher's updates.
+    updates: mpsc::UnboundedSender<Update>,
 }
 
 impl Shared {
@@ -83,16 +88,16 @@ impl Shared {
 }
 
 /// Serve the live scoreboard for a CTFd server.
-pub async fn run(config: ResolvedConfig, args: LeaderboardArgs) -> anyhow::Result<()> {
-    serve(board::connect(&config, &args).await?, &args).await
+pub async fn run(config: ResolvedConfig, args: WebArgs) -> anyhow::Result<()> {
+    serve(board::connect(&config, &args.board).await?, &args).await
 }
 
 /// Serve the live scoreboard on fictional, simulated data.
-pub async fn run_demo(args: LeaderboardArgs) -> anyhow::Result<()> {
-    serve(board::connect_demo(&args).await?, &args).await
+pub async fn run_demo(args: WebArgs) -> anyhow::Result<()> {
+    serve(board::connect_demo(&args.board).await?, &args).await
 }
 
-async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
+async fn serve(board: Board, args: &WebArgs) -> anyhow::Result<()> {
     let addr = SocketAddr::new(args.bind, args.port);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -104,6 +109,7 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
         source,
         model,
         server,
+        workspace,
     } = board;
     let wanted = model.wanted_accounts(None);
     let (interval, kind) = (model.interval, model.kind);
@@ -119,10 +125,18 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
         snapshot: snapshot_tx,
         commands: cmd_tx,
         sent_wanted: Mutex::new(wanted.clone()),
+        workspace,
+        updates: update_tx.clone(),
     });
 
     let fetcher = tokio::spawn(board::fetch_loop(
-        source, args.top, interval, kind, wanted, cmd_rx, update_tx,
+        source,
+        args.board.top,
+        interval,
+        kind,
+        wanted,
+        cmd_rx,
+        update_tx,
     ));
     let applier = {
         let shared = shared.clone();
@@ -137,16 +151,24 @@ async fn serve(board: Board, args: &LeaderboardArgs) -> anyhow::Result<()> {
 
     let app = router(shared);
     let url = page_url(local, &key);
-    println!("Live scoreboard: {url}");
+    // Written without `println!`: whoever reads the link may close the
+    // pipe right after it, and that must not stop the server.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "Live scoreboard: {url}");
     if !args.bind.is_loopback() {
         eprintln!(
             "Warning: listening on {local}, so other machines on the network can open the \
              scoreboard with the link above."
         );
     }
-    println!("Press Ctrl-C to stop.");
+    let _ = writeln!(out, "Press Ctrl-C to stop.");
+    let _ = out.flush();
     if !args.no_open {
-        open_browser(&url);
+        if browser_available() {
+            open_browser(&url);
+        } else {
+            eprintln!("No browser can be opened from here. Open the link above yourself.");
+        }
     }
 
     let result = tokio::select! {
@@ -164,6 +186,11 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/events", get(events))
         .route("/refresh", post(refresh))
         .route("/rival", post(set_rival))
+        .route("/goal", post(set_goal))
+        .route("/sort", post(set_sort))
+        .route("/download", post(download))
+        .route("/detail", post(detail))
+        .route("/submit", post(submit))
         .route("/pin", post(set_pin))
         .layer(middleware::from_fn_with_state(shared.clone(), require_key));
 
@@ -329,6 +356,124 @@ async fn set_rival(State(shared): State<Arc<Shared>>, Json(body): Json<RivalBody
 }
 
 #[derive(Deserialize)]
+struct GoalBody {
+    /// Account key from the Plan ladder; `null` goes back to the default.
+    key: Option<String>,
+}
+
+async fn set_goal(State(shared): State<Arc<Shared>>, Json(body): Json<GoalBody>) -> StatusCode {
+    {
+        let mut model = shared.lock();
+        match body.key {
+            Some(key) => {
+                if model.index_of_key(&key).is_none() {
+                    return StatusCode::NOT_FOUND;
+                }
+                model.set_goal(key);
+            }
+            None => model.reset_goal(),
+        }
+    }
+    shared.publish();
+    StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct SortBody {
+    /// One of the sort keys in the snapshot's `plan.sort`.
+    by: String,
+}
+
+async fn set_sort(State(shared): State<Arc<Shared>>, Json(body): Json<SortBody>) -> StatusCode {
+    let Some(sort) = crate::board::analysis::Sort::from_key(&body.by) else {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    };
+    shared.lock().set_sort(sort);
+    shared.publish();
+    StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct DownloadBody {
+    /// Challenge to download; `null` for every visible challenge.
+    id: Option<u64>,
+}
+
+/// Download challenge files into the workspace, as `ctfdc dl` does.  The
+/// outcome arrives as a notice in a later snapshot.
+async fn download(State(shared): State<Arc<Shared>>, Json(body): Json<DownloadBody>) -> StatusCode {
+    let what = {
+        let model = shared.lock();
+        if model.downloading {
+            return StatusCode::CONFLICT;
+        }
+        match body.id {
+            Some(id) if model.demo || model.data.challenges.iter().any(|c| c.id == id) => {
+                board::model::Download::One(id)
+            }
+            Some(_) => return StatusCode::NOT_FOUND,
+            None => board::model::Download::All,
+        }
+    };
+    board::request_download(shared.workspace.as_ref(), what, &shared.updates);
+    StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct DetailBody {
+    id: u64,
+}
+
+/// Fetch a challenge's description and files; they arrive in a later
+/// snapshot.
+async fn detail(State(shared): State<Arc<Shared>>, Json(body): Json<DetailBody>) -> StatusCode {
+    {
+        let mut model = shared.lock();
+        if !model.data.challenges.iter().any(|c| c.id == body.id) {
+            return StatusCode::NOT_FOUND;
+        }
+        if !model.want_detail(body.id) {
+            return StatusCode::NO_CONTENT;
+        }
+    }
+    board::request_detail(shared.workspace.as_ref(), body.id, &shared.updates);
+    StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct SubmitBody {
+    id: u64,
+    flag: String,
+}
+
+/// Send a flag to the CTF.  The answer arrives as a notice and as the
+/// challenge's last attempt in a later snapshot.
+async fn submit(State(shared): State<Arc<Shared>>, Json(body): Json<SubmitBody>) -> StatusCode {
+    let flag = body.flag.trim().to_string();
+    if flag.is_empty() {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    }
+    let challenge = {
+        let model = shared.lock();
+        if model.submitting {
+            return StatusCode::CONFLICT;
+        }
+        match model.data.challenges.iter().find(|c| c.id == body.id) {
+            Some(c) => c.clone(),
+            None => return StatusCode::NOT_FOUND,
+        }
+    };
+    board::request_submit(
+        shared.workspace.as_ref(),
+        Some(challenge),
+        body.id,
+        flag,
+        &shared.updates,
+    );
+    StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
 struct PinBody {
     id: u64,
     pinned: bool,
@@ -353,6 +498,29 @@ async fn set_pin(State(shared): State<Arc<Shared>>, Json(body): Json<PinBody>) -
     StatusCode::NO_CONTENT
 }
 
+/// What opens a URL on other Unix systems.
+const UNIX_OPENER: &str = "xdg-open";
+
+/// Whether a browser on this machine can show the page to whoever ran
+/// ctfdc: not over SSH (the browser would open on the remote machine),
+/// and on Linux and other Unix systems only with a desktop session and
+/// `xdg-open`.
+pub fn browser_available() -> bool {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    let desktop = set("DISPLAY") || set("WAYLAND_DISPLAY");
+    let opener = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join(UNIX_OPENER).is_file())
+    });
+    can_open_browser(
+        set("SSH_CONNECTION") || set("SSH_TTY"),
+        cfg!(any(target_os = "macos", windows)) || (desktop && opener),
+    )
+}
+
+fn can_open_browser(over_ssh: bool, local_opener: bool) -> bool {
+    !over_ssh && local_opener
+}
+
 /// Open `url` in the default browser; failures only print a hint.
 fn open_browser(url: &str) {
     use std::process::{Command, Stdio};
@@ -365,7 +533,7 @@ fn open_browser(url: &str) {
         c.args(["/C", "start", ""]).arg(url);
         c
     } else {
-        let mut c = Command::new("xdg-open");
+        let mut c = Command::new(UNIX_OPENER);
         c.arg(url);
         c
     };
@@ -391,6 +559,13 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn no_browser_over_ssh_or_without_an_opener() {
+        assert!(can_open_browser(false, true));
+        assert!(!can_open_browser(true, true));
+        assert!(!can_open_browser(false, false));
     }
 
     #[test]

@@ -33,6 +33,17 @@
 
   --fast: 120ms;
   --normal: 180ms;
+
+  /* Layout: page gutter, gap between cards, card inset, bar and row heights. */
+  --gutter: 24px;
+  --gap: 12px;
+  --inset: 20px;
+  --bar: 48px;
+  --row: 36px;
+
+  /* Layers above the page: popovers, then notifications. */
+  --layer-popover: 20;
+  --layer-toast: 40;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -137,8 +148,8 @@ button, input, select { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--border);
 }
 .topbar-inner {
-  max-width: 1440px; margin: 0 auto; height: 56px;
-  padding: 0 24px;
+  max-width: 1600px; margin: 0 auto; height: var(--bar);
+  padding: 0 var(--gutter);
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px;
 }
 .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -200,6 +211,9 @@ button, input, select { font: inherit; color: inherit; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .btn-outline { background: color-mix(in oklab, var(--input) 30%, transparent); }
 }
+.btn-primary { background: var(--primary); color: var(--primary-foreground); box-shadow: var(--shadow-xs); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--primary) 88%, var(--background)); }
+.btn-primary:active:not(:disabled) { background: color-mix(in oklab, var(--primary) 78%, var(--background)); }
 .btn-ghost { color: var(--foreground); }
 .btn-ghost:hover:not(:disabled) { background: var(--accent); }
 .btn-ghost:active:not(:disabled) { background: color-mix(in oklab, var(--accent) 70%, var(--foreground) 6%); }
@@ -285,7 +299,7 @@ button, input, select { font: inherit; color: inherit; }
 .select-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .popover {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--layer-popover);
   width: max(100%, 280px);
   border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--popover); color: var(--foreground);
@@ -345,8 +359,8 @@ button, input, select { font: inherit; color: inherit; }
 
 /* ---------------------------------------------------------------- page */
 
-.page { max-width: 1440px; margin: 0 auto; padding: 24px; }
-.view { display: grid; gap: 16px; }
+.page { max-width: 1600px; margin: 0 auto; padding: 16px var(--gutter); }
+.view { display: grid; gap: var(--gap); }
 
 .card {
   background: var(--card); color: var(--card-foreground);
@@ -355,23 +369,31 @@ button, input, select { font: inherit; color: inherit; }
   display: flex; flex-direction: column; min-width: 0;
 }
 .card-header {
-  padding: 20px 24px 0; display: grid; gap: 4px;
+  padding: 16px var(--inset) 0; display: grid; gap: 4px; flex: none;
 }
-.card-header.row { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; }
+.card-header.row {
+  display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; align-items: center;
+  min-height: 48px;
+}
+.card-heading { display: grid; gap: 2px; min-width: 0; }
 .card-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
-.card-content { padding: 16px 24px 20px; }
+.card-note { font-size: 13px; color: var(--muted-foreground); min-height: 18px; }
+.card-content { padding: 12px var(--inset) 16px; }
 
 .empty {
   padding: 32px 24px; text-align: center; color: var(--muted-foreground); font-size: 13.5px;
 }
-.empty-lg { padding: 64px 24px; border: 1px dashed var(--border); border-radius: calc(var(--radius) + 4px); }
+.empty-lg {
+  padding: 64px 24px; border: 1px dashed var(--border); border-radius: calc(var(--radius) + 4px);
+  display: grid; place-content: center;
+}
 
 /* ---------------------------------------------------------------- chart */
 
 .chart { width: 100%; height: 360px; }
 
 .legend {
-  display: flex; flex-wrap: wrap; gap: 4px 4px; margin-top: 12px; justify-content: center;
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; justify-content: center;
 }
 .legend-item {
   appearance: none; border: 0; background: transparent; cursor: pointer;
@@ -385,8 +407,6 @@ button, input, select { font: inherit; color: inherit; }
 .legend-item[aria-pressed="false"] { opacity: 0.45; }
 .legend-item[aria-pressed="false"] .swatch { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--muted-foreground); }
 .legend-item span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.legend-static { cursor: default; }
-.legend-static:hover { background: transparent; }
 
 .swatch {
   width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block;
@@ -412,39 +432,47 @@ button, input, select { font: inherit; color: inherit; }
 
 /* ---------------------------------------------------------------- board */
 
-.board-grid {
-  display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 16px;
+/* Wide but too short to fit: the graph on top, standings beside the feed. */
+#view-board {
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  grid-template-areas: "chart chart" "standings feed";
   align-items: start;
 }
-.board-grid > .card { max-height: 680px; }
+.chart-card { grid-area: chart; }
+.standings-card { grid-area: standings; container-type: inline-size; }
+.feed-card { grid-area: feed; container-type: inline-size; }
+.standings-card, .feed-card { max-height: 680px; }
 
-.table-scroll { overflow: auto; margin-top: 12px; min-height: 0; flex: 1; overscroll-behavior: contain; }
+.table-scroll { overflow: auto; margin-top: 8px; min-height: 0; flex: 1; overscroll-behavior: contain; }
 .table-scroll-sm { max-height: 340px; }
 
 .table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
 .table th {
   position: sticky; top: 0; z-index: 1;
   background: var(--card);
-  height: 36px; padding: 0 12px; text-align: left;
+  height: 32px; padding: 0 8px; text-align: left;
   font-weight: 500; font-size: 13px; color: var(--muted-foreground); white-space: nowrap;
   border-bottom: 1px solid var(--border);
 }
-.table th:first-child, .table td:first-child { padding-left: 24px; }
-.table th:last-child, .table td:last-child { padding-right: 24px; }
+.table th:first-child, .table td:first-child { padding-left: var(--inset); }
+.table th:last-child, .table td:last-child { padding-right: var(--inset); }
 .table td {
-  height: 40px; padding: 0 12px; border-bottom: 1px solid var(--border);
+  height: var(--row); padding: 0 8px; border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr { transition: background-color var(--fast) ease; }
 .table tbody tr:hover { background: var(--row-hover); }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.col-rank { width: 56px; }
+.col-rank { width: 52px; }
 .col-actions { width: 1%; }
 
 .rank { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .rank-podium { color: var(--foreground); font-weight: 600; }
-.team { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 360px; }
+.team { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* The name column takes what the others leave and truncates, so a table
+   never grows wider than its card. */
+.table td.col-name { width: 100%; max-width: 0; }
 .team-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .team .swatch { width: 8px; height: 8px; border-radius: 50%; }
 .swatch-empty { visibility: hidden; }
@@ -477,7 +505,7 @@ tr.cutoff td::before {
   border-top: 1px dashed var(--attention);
 }
 tr.cutoff td span {
-  position: absolute; left: 84px; top: -10px; padding: 0 8px;
+  position: absolute; left: 68px; top: -10px; padding: 0 8px;
   background: var(--card); color: var(--attention);
   font-size: 11.5px; font-weight: 500; line-height: 18px; border-radius: 4px;
 }
@@ -487,7 +515,7 @@ tr.cutoff td span {
 .feed { display: grid; }
 .feed li {
   display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center;
-  padding: 10px 24px; border-bottom: 1px solid var(--border);
+  padding: 8px var(--inset); border-bottom: 1px solid var(--border);
 }
 .feed li:last-child { border-bottom: 0; }
 .feed-time { color: var(--muted-foreground); font-size: 12.5px; font-variant-numeric: tabular-nums; }
@@ -502,44 +530,50 @@ tr.cutoff td span {
 
 /* -------------------------------------------------------------- analysis */
 
-.analysis-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-
-.h2h {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 24px;
-  padding: 24px;
+/* A rail that says who you compare with and how you stand, beside the
+   lists that say what to do about it. */
+#analysis-body {
+  display: grid; gap: var(--gap); min-width: 0;
+  grid-template-columns: 340px minmax(0, 1.15fr) minmax(0, 1fr);
+  grid-template-areas: "versus catch field" "versus catch edge";
+  align-items: start;
 }
-.h2h-side { display: grid; gap: 12px; min-width: 0; }
-.h2h-right { text-align: right; }
-.h2h-who { display: grid; gap: 4px; min-width: 0; }
-.h2h-label { font-size: 13px; color: var(--muted-foreground); display: flex; gap: 6px; align-items: center; }
-.h2h-right .h2h-label { justify-content: flex-end; }
-.h2h-name { font-size: 18px; font-weight: 600; letter-spacing: -0.015em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.h2h-score { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.h2h-score small { font-size: 14px; font-weight: 500; color: var(--muted-foreground); letter-spacing: 0; margin-left: 4px; }
-.h2h-stats { display: flex; gap: 20px; flex-wrap: wrap; }
-.h2h-right .h2h-stats { justify-content: flex-end; }
-.stat { display: grid; gap: 2px; }
-.stat dt { font-size: 12px; color: var(--muted-foreground); }
-.stat dd { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+.versus { grid-area: versus; padding: 16px var(--inset); gap: 16px; overflow: visible; }
+#analysis-body .catch-card { grid-area: catch; }
+.field-card { grid-area: field; }
+.edge-card { grid-area: edge; }
+.catch-card, .field-card, .edge-card { container-type: inline-size; }
 
-.h2h-gap {
-  display: grid; justify-items: center; gap: 4px; text-align: center;
-  padding: 0 24px; border-left: 1px solid var(--border); border-right: 1px solid var(--border);
-  min-width: 200px;
-}
-.h2h-gap-num { font-size: 32px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.h2h-gap-num.ahead { color: var(--success); }
-.h2h-gap-num.behind { color: var(--destructive); }
-.h2h-gap-text { font-size: 13px; color: var(--muted-foreground); }
-.h2h-cutoff { margin-top: 8px; }
+.versus-pick { display: grid; gap: 8px; }
+.versus-pick-head { justify-content: space-between; min-height: 28px; }
+.versus-pick .combo { flex: 1; min-width: 0; }
+.versus-pick .select { width: 100%; }
 
-/* Catch-up fills the left half at the height of everything on the right. */
-.analysis-grid {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px;
-}
-.analysis-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-/* Zero basis: the table scrolls inside the card instead of setting the row height. */
-.catch-card .table-scroll { flex: 1 1 0; height: 0; min-height: 360px; }
+.versus-gap { display: grid; gap: 2px; }
+.versus-verdict { display: flex; align-items: baseline; gap: 8px; }
+.versus-num { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.versus-num.ahead { color: var(--success); }
+.versus-num.behind { color: var(--destructive); }
+.versus-word, .versus-line { font-size: 13.5px; color: var(--muted-foreground); }
+
+/* Flush with the rail's own inset rather than a card's. */
+.versus-table { margin-inline: calc(-1 * var(--inset)); width: calc(100% + 2 * var(--inset)); }
+.versus-table th[scope="row"] { position: static; border-bottom: 1px solid var(--border); }
+.versus-table tbody tr:last-child th { border-bottom: 0; }
+.versus-table td { font-weight: 500; }
+.versus-table thead td { height: 32px; border-bottom: 1px solid var(--border); }
+
+.versus-table th .swatch { margin-right: 6px; }
+/* Two facts side by side: a small label over each value. */
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.pair > div { display: grid; gap: 2px; min-width: 0; }
+.pair dt { font-size: 12px; color: var(--muted-foreground); }
+.pair dd { margin: 0; display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 13.5px; }
+.pair dd > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.pair dd > span:last-child { flex: none; font-variant-numeric: tabular-nums; }
+.versus-chart { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+
+#analysis-body .table-scroll { max-height: 420px; }
 
 tr.closes td {
   height: 0; padding: 0; border-bottom: 0; position: relative;
@@ -549,68 +583,21 @@ tr.closes td::before {
   border-top: 1px dashed var(--success);
 }
 tr.closes td span {
-  position: absolute; left: 24px; top: -10px; padding: 0 8px;
+  position: absolute; left: var(--inset); top: -10px; padding: 0 8px;
   background: var(--card); color: var(--success);
   font-size: 11.5px; font-weight: 500; line-height: 18px; border-radius: 4px;
 }
-.chal-name { overflow: hidden; text-overflow: ellipsis; max-width: 280px; display: block; }
+.chal-name { overflow: hidden; text-overflow: ellipsis; display: block; min-width: 0; }
 .cat { color: var(--muted-foreground); }
 .pop { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .pop-bar { width: 40px; height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; }
 .pop-bar > i { display: block; height: 100%; background: var(--foreground); opacity: 0.7; border-radius: 3px; }
 
-/* ----------------------------------------------------------- responsive */
-
-@media (max-width: 1100px) {
-  .board-grid { grid-template-columns: 1fr; }
-  .board-grid > .card { max-height: none; }
-  .board-grid .table-scroll { max-height: 560px; }
-  .analysis-grid { grid-template-columns: 1fr; }
-  .catch-card .table-scroll { flex: none; height: auto; min-height: 0; max-height: 520px; }
-}
-@media (max-width: 760px) {
-  .topbar-inner {
-    grid-template-columns: 1fr auto; height: auto; padding: 8px 16px; row-gap: 8px;
-  }
-  .tabs { grid-row: 2; grid-column: 1 / -1; justify-self: start; }
-  .status[data-state="live"] { display: none; }
-  .page { padding: 16px; }
-  .card-header { padding: 16px 16px 0; }
-  .card-content { padding: 12px 16px 16px; }
-  .table th:first-child, .table td:first-child { padding-left: 16px; }
-  .table th:last-child, .table td:last-child { padding-right: 16px; }
-  .feed li { padding: 10px 16px; }
-  .hide-sm { display: none; }
-  .chart { height: 280px; }
-  .input { width: 100%; }
-  .card-header.row > .row { width: 100%; }
-  .card-header.row > .row .input-wrap { flex: 1; }
-  .h2h { grid-template-columns: 1fr; padding: 16px; gap: 16px; }
-  .h2h-right { text-align: left; }
-  .h2h-right .h2h-label, .h2h-right .h2h-stats { justify-content: flex-start; }
-  .h2h-gap { border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 16px 0; justify-items: start; text-align: left; order: 3; }
-  .h2h-gap { order: 0; }
-  .combo { flex: 1; min-width: 180px; }
-  .select { width: 100%; }
-  .team { max-width: 180px; }
-  /* The rival picker on the Analysis tab covers this on narrow screens. */
-  .btn-compare { display: none; }
-  .chal-name { max-width: 180px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0ms !important; animation: none !important; }
-}
-@media (forced-colors: active) {
-  .swatch, .pop-bar > i { forced-color-adjust: none; }
-}
-
-.table-compact td { height: 34px; }
+.table-compact td { height: 32px; }
 .table .sub { display: inline-block; min-width: 4ch; margin-left: 8px; color: var(--muted-foreground); text-align: right; }
 
 /* Points by category. */
-.chart-radar { height: 340px; }
-@media (max-width: 640px) { .chart-radar { height: 280px; } }
+.chart-radar { height: 300px; }
 .chart-tip-table { border-collapse: collapse; font-size: 12px; }
 .chart-tip-table th { font-weight: 500; color: var(--muted-foreground); text-align: right; padding: 0 0 4px 12px; }
 .chart-tip-table th:first-child, .chart-tip-table td:first-child { text-align: left; padding-left: 0; }
@@ -618,11 +605,414 @@ tr.closes td span {
 .chart-tip-table .sub { display: inline; min-width: 0; margin-left: 6px; color: var(--muted-foreground); }
 .chart-tip-wide { max-width: none; }
 
-/* Plan. */
-.plan-hero { padding: 20px 24px; }
-.plan-stats { display: flex; flex-wrap: wrap; gap: 16px 40px; margin: 0; }
-.plan-stat dd { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 6px; }
-.plan-stat dd small { font-size: 13px; font-weight: 400; color: var(--muted-foreground); }
-.plan-stat dd.neg { color: var(--destructive); }
-.plan-stat dd.pos { color: var(--success); }
-#view-plan .analysis-grid { margin-top: 16px; }
+/* ----------------------------------------------------------------- plan */
+
+/* The same shape as Analysis: a rail to pick the goal from, and beside it
+   one card that answers what to solve to get there. */
+#plan-body {
+  display: grid; gap: var(--gap); min-width: 0;
+  grid-template-columns: clamp(400px, 34vw, 500px) minmax(0, 1fr);
+  align-items: start;
+}
+.plan-rail { padding: 16px 0; gap: 20px; container-type: inline-size; }
+.rail-head { justify-content: space-between; padding: 0 var(--inset); min-height: 28px; }
+
+/* Ladder: one row per team, the ones ahead of you pickable as the goal. */
+.ladder { display: grid; }
+.rung {
+  display: grid; grid-template-columns: 16px 24px minmax(0, 1fr) 52px 40px 60px 36px;
+  align-items: center; gap: 8px; width: 100%; min-height: var(--row);
+  padding: 0 var(--inset); border: 0; background: transparent; text-align: left;
+  font-size: 13.5px; border-top: 1px solid var(--border);
+}
+.rung .num { text-align: right; }
+.rung-head { min-height: 28px; border-top: 0; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
+.rail-note {
+  padding: 8px var(--inset) 0; border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--muted-foreground);
+}
+.rail-note:empty { display: none; }
+.rung-pos { color: var(--muted-foreground); }
+.rung-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.rung-name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+button.rung { cursor: pointer; transition: background-color var(--fast) ease; }
+button.rung:hover { background: var(--row-hover); }
+button.rung:active { background: var(--accent); transition-duration: 0ms; }
+button.rung[aria-checked="true"] { background: var(--row-you); font-weight: 600; }
+button.rung:focus-visible { outline-offset: -2px; border-radius: 0; }
+.rung.is-me { background: var(--row-you); font-weight: 600; }
+/* The mark of the picked goal, drawn like a radio button. */
+.radio {
+  width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--muted-foreground);
+  display: grid; place-items: center;
+}
+button.rung[aria-checked="true"] .radio { border-color: var(--foreground); }
+button.rung[aria-checked="true"] .radio::after {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--foreground);
+}
+
+.focus { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+.focus > .card-title { padding: 0 var(--inset); }
+.focus .table-scroll { margin-top: 0; }
+.likely { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
+
+/* The answer, large enough to read from across the desk. */
+.plan-head {
+  padding: 20px var(--inset) 8px; flex: none;
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 24px;
+}
+.plan-headline { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
+.plan-sub { font-size: 14px; color: var(--muted-foreground); white-space: nowrap; }
+.plan-sub b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Difficulty read off solves and points is a guess: said more quietly
+   than an organiser's tag. */
+.diff[data-tagged="false"] { color: var(--muted-foreground); }
+.targets-card { container-type: inline-size; }
+.targets-card .table-scroll { flex: 1 1 0; min-height: 320px; }
+.table-roomy td { height: 40px; }
+.table-roomy tbody tr:not(.closes) { cursor: pointer; }
+tr.is-picked { background: var(--row-you); }
+tr.is-picked:hover { background: var(--row-you); }
+/* The name is the control that picks a target; it reads as the name. */
+.pick {
+  appearance: none; border: 0; background: transparent; padding: 0; cursor: pointer;
+  text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+/* Column heads that order the list; the active one says so with an arrow. */
+.sort {
+  appearance: none; border: 0; background: transparent; padding: 0; cursor: pointer;
+  font: inherit; color: inherit; border-radius: 4px;
+}
+.sort:hover { color: var(--foreground); }
+th[aria-sort] .sort { color: var(--foreground); }
+th[aria-sort] .sort::after { content: " ↓"; }
+th[aria-sort="ascending"] .sort::after { content: " ↑"; }
+.guess { color: var(--muted-foreground); }
+
+/* Details of the picked target: every signal, labelled. */
+.signals {
+  flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
+  display: grid; gap: 8px;
+}
+.signals-head { gap: 16px; }
+.signals-head .card-title { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.btn[aria-busy="true"] { opacity: 0.6; cursor: progress; }
+/* One timeline, then four blocks of a heading over three lines: the
+   arrangement the terminal uses too. */
+.viz { display: grid; gap: 12px 32px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.viz-block { display: grid; gap: 4px; min-width: 0; align-content: start; grid-auto-rows: 20px; }
+.viz-label { font-size: 12px; color: var(--muted-foreground); }
+.viz-line { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Difficulty as four steps. */
+.level { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; flex: none; }
+.pips { display: inline-flex; gap: 3px; }
+.pips i { width: 14px; height: 6px; border-radius: 2px; background: var(--muted); }
+.pips i.on { background: var(--foreground); }
+.level[data-tagged="false"] .pips i.on { background: var(--muted-foreground); }
+
+/* Solves over the CTF: a line from the start to now, a dot per solve, and
+   the last hour shaded; beside it, the count and the first and latest. */
+.viz-timeline {
+  grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(120px, 1fr) auto auto;
+  align-items: center; gap: 12px; font-size: 13px;
+}
+.viz-summary { display: flex; gap: 20px; white-space: nowrap; color: var(--muted-foreground); padding-left: 12px; }
+.viz-summary > span:first-child { color: var(--foreground); }
+.timeline { position: relative; height: 20px; }
+.timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 9px; border-top: 1px solid var(--muted-foreground); opacity: 0.5; }
+.timeline-recent { position: absolute; top: 2px; height: 16px; right: 0; border-radius: 4px; background: var(--muted); }
+.timeline-dot {
+  position: absolute; top: 5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%;
+  background: var(--foreground); box-shadow: 0 0 0 2px var(--card);
+}
+
+/* A label, a bar and its count on one line. */
+.meter { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
+.meter-wide { grid-template-columns: minmax(0, 1fr) auto; }
+.meter-who { grid-template-columns: minmax(0, 1fr) auto; }
+.meter-who > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar { position: relative; height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; }
+.bar > i { position: absolute; inset: 0 auto 0 0; background: var(--foreground); border-radius: 3px; }
+
+/* A value with its plausible range: a band and a mark on a 0 to 100 track. */
+.range { position: relative; height: 16px; }
+.range::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 6px; border-radius: 3px; background: var(--muted); }
+.range-band { position: absolute; top: 5px; height: 6px; border-radius: 3px; background: var(--muted-foreground); opacity: 0.55; }
+.range-mark { position: absolute; top: 1px; width: 3px; height: 14px; margin-left: -1.5px; border-radius: 2px; background: var(--foreground); }
+
+/* How long it took the others (line: shortest to longest, box: the middle
+   half, tick: the median) and, under it, where your time falls.  Two of
+   the block's three lines. */
+.spans { position: relative; grid-row: span 2; }
+.spans-line { position: absolute; top: 9px; height: 0; border-top: 1.5px solid var(--muted-foreground); }
+.spans-box { position: absolute; top: 4px; height: 11px; border-radius: 3px; background: var(--muted); border: 1px solid var(--muted-foreground); }
+.spans-median { position: absolute; top: 2px; width: 2px; height: 15px; margin-left: -1px; background: var(--foreground); }
+.spans-you { position: absolute; top: 26px; margin-left: -5px; border: 5px solid transparent; border-top: 0; border-bottom: 8px solid var(--foreground); }
+.spans-you.guess { border-bottom-color: var(--muted-foreground); }
+
+/* A solve on the route to the goal: a rail, a step number, full weight. */
+tr.on-route td:first-child { box-shadow: inset 2px 0 0 var(--foreground); }
+tr.on-route .chal-name { font-weight: 600; }
+.step {
+  display: inline-block; min-width: 2ch; margin-right: 8px;
+  color: var(--muted-foreground); font-variant-numeric: tabular-nums;
+}
+.chal { display: flex; align-items: baseline; min-width: 0; }
+.why { color: var(--muted-foreground); }
+
+/* ----------------------------------------------------------- challenges */
+
+/* A rail to pick a challenge from, as on Analysis and Plan, and beside it
+   the challenge: what it says, how to reach it, and the flag field. */
+#chal-body {
+  display: grid; gap: var(--gap); min-width: 0;
+  grid-template-columns: clamp(360px, 32vw, 460px) minmax(0, 1fr);
+  align-items: start;
+}
+.chal-list { padding-top: 16px; gap: 12px; }
+.chal-list .rail-head { align-items: baseline; }
+.chal-tools { padding: 0 var(--inset); }
+.chal-tools .input-wrap { flex: 1; min-width: 0; }
+.chal-tools .input { width: 100%; }
+.chal-list .table-scroll { margin-top: 0; max-height: 560px; }
+
+/* Grouped by category: a heading with how much of it is solved, then its
+   challenges.  One quiet mark says solved or downloaded. */
+.chal-table .col-mark { width: 36px; padding-right: 0; }
+.chal-table th.group {
+  position: static; height: 36px; padding-top: 8px; text-align: left;
+  font-size: 13px; font-weight: 600; color: var(--foreground); background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+.chal-table tbody:first-of-type th.group { padding-top: 0; height: 28px; }
+.group-row { display: flex; align-items: center; gap: 12px; }
+.group-row .bar { flex: 1; max-width: 96px; margin-left: auto; }
+.group-row .tabular { font-weight: 400; color: var(--muted-foreground); min-width: 3ch; text-align: right; }
+.chal-table td { height: 34px; }
+.chal-table tbody tr:not(.group-head) { cursor: pointer; }
+.chal-table tr.is-picked td:first-child { box-shadow: inset 2px 0 0 var(--foreground); }
+.chal-table tr.is-picked .pick { font-weight: 600; }
+/* Positioned, so the hidden label inside stays with its row instead of
+   stretching the page past the scrolling list. */
+.mark { position: relative; display: grid; place-items: center; width: 16px; height: 16px; color: var(--muted-foreground); }
+.mark .icon { width: 14px; height: 14px; }
+.mark.solved { color: var(--success); }
+tr.is-solved .pick, tr.is-solved td { color: var(--muted-foreground); }
+
+.chal-detail { min-height: 320px; }
+.chal-head { padding: 20px var(--inset) 8px; display: grid; gap: 4px; flex: none; }
+.chal-head .plan-sub { white-space: normal; }
+.chal-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px var(--inset) 16px; display: grid; gap: 16px; align-content: start; }
+.chal-scroll:focus-visible { outline-offset: -2px; }
+.chal-facts { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 16px; font-size: 13.5px; }
+.chal-facts:empty { display: none; }
+.chal-facts dt { color: var(--muted-foreground); }
+.chal-facts dd { margin: 0; overflow-wrap: anywhere; }
+.chal-facts code { font-family: var(--font-mono); font-size: 13px; }
+/* Shown as the organisers wrote it, as text: never interpreted. */
+.chal-desc { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; line-height: 1.55; }
+.chal-form {
+  flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px 8px; align-items: center;
+}
+.input-flag { width: 100%; padding-left: 10px; font-family: var(--font-mono); font-size: 13px; }
+.chal-attempt { grid-column: 2 / -1; font-size: 13px; min-height: 18px; color: var(--muted-foreground); }
+.chal-attempt.good { color: var(--success); }
+.chal-attempt.bad { color: var(--destructive); }
+
+/* -------------------------------------------------------- notifications */
+
+.toasts {
+  position: fixed; right: 16px; bottom: 16px; z-index: var(--layer-toast);
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  width: min(360px, calc(100vw - 32px)); pointer-events: none;
+}
+.toast {
+  pointer-events: auto; width: 100%;
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) 28px; gap: 12px; align-items: start;
+  padding: 12px 8px 12px 16px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--popover); color: var(--foreground); box-shadow: var(--shadow-lg);
+  animation: toast-in var(--normal) cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+.toast[data-leaving] { opacity: 0; transition: opacity var(--fast) ease; }
+.toast > .icon { margin-top: 2px; color: var(--muted-foreground); }
+.toast[data-tone="good"] > .icon { color: var(--success); }
+.toast[data-tone="bad"] > .icon { color: var(--destructive); }
+.toast-title { font-weight: 500; overflow-wrap: anywhere; }
+.toast-detail { font-size: 13px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.toast .btn { margin-top: -4px; color: var(--muted-foreground); }
+
+/* --------------------------------------------------------------- dialog */
+
+.dialog {
+  width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px);
+  background: var(--popover); color: var(--foreground); box-shadow: var(--shadow-lg);
+}
+.dialog[open] { animation: toast-in var(--normal) cubic-bezier(0.16, 1, 0.3, 1); }
+.dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 12px 8px var(--inset); }
+.keys { margin: 0; padding: 0 var(--inset) var(--inset); display: grid; }
+.keys > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 8px 0; border-top: 1px solid var(--border); }
+.keys dt { white-space: nowrap; }
+.keys dd { margin: 0; color: var(--muted-foreground); }
+kbd {
+  display: inline-block; min-width: 22px; padding: 0 6px; text-align: center;
+  border: 1px solid var(--input); border-radius: 6px; background: var(--muted);
+  font: 500 12px/20px var(--font-sans);
+}
+
+/* ------------------------------------------------- fit to one viewport */
+
+/* On a screen with room for it, nothing scrolls but the lists: the page
+   owns the viewport, each view fills what the top bar leaves, and every
+   card scrolls its own rows. */
+@media (min-width: 1024px) and (min-height: 640px) {
+  html, body { height: 100%; }
+  body { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .topbar { position: static; background: var(--background); backdrop-filter: none; }
+  .page { width: 100%; min-height: 0; display: flex; flex-direction: column; }
+  .alert { flex: none; margin-bottom: var(--gap); }
+  .view { flex: 1; min-height: 0; }
+  .card { min-height: 0; overflow: hidden; }
+  .table-scroll-sm, .standings-card, .feed-card { max-height: none; }
+
+  /* Board: standings at full height, the graph over the feed beside it. */
+  #view-board {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+    grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
+    grid-template-areas: "standings chart" "standings feed";
+    align-items: stretch;
+  }
+  /* L steps through the layouts: split, the graph alone, the tables. */
+  #view-board[data-layout="graph"] { grid-template: "chart" minmax(0, 1fr) / minmax(0, 1fr); }
+  #view-board[data-layout="graph"] :is(.standings-card, .feed-card) { display: none; }
+  #view-board[data-layout="table"] {
+    grid-template: "standings feed" minmax(0, 1fr) / minmax(0, 1.4fr) minmax(0, 1fr);
+  }
+  #view-board[data-layout="table"] .chart-card { display: none; }
+  .chart-card .card-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .chart-card .chart, .chart-radar { flex: 1; min-height: 0; height: auto; overflow: hidden; }
+  .chart-card .legend { flex: none; max-height: 56px; overflow-y: auto; overscroll-behavior: contain; }
+
+  /* Analysis: the rail and the catch-up list at full height, the two
+     shorter lists sharing the last column. */
+  #view-analysis, #view-plan { grid-template-rows: minmax(0, 1fr); }
+  #analysis-body {
+    grid-template-rows: minmax(0, 1.3fr) minmax(0, 1fr); align-items: stretch; min-height: 0;
+  }
+  #analysis-body .table-scroll { max-height: none; }
+  .versus-chart { flex: 1; }
+  /* A short window gives the radar the room the table can spare. */
+  @media (max-height: 760px) {
+    .versus { gap: 12px; }
+    .versus-table td, .versus-table th { height: 28px; }
+  }
+
+  /* Challenges: the list and the picked one at full height. */
+  #view-challenges { grid-template-rows: minmax(0, 1fr); }
+  #chal-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
+  .chal-list .table-scroll { max-height: none; }
+  .chal-list { min-height: 0; }
+
+  /* Plan: the rail and the answer at full height. */
+  #plan-body { grid-template-rows: minmax(0, 1fr); align-items: stretch; min-height: 0; }
+  .targets-card .table-scroll { min-height: 0; }
+  /* The details never crowd out the list: they scroll past a third. */
+  .signals { max-height: 42%; overflow-y: auto; overscroll-behavior: contain; }
+  .ladder { flex: none; }
+  .focus { flex: 1; }
+}
+
+/* ----------------------------------------------------------- responsive */
+
+/* Narrow cards drop their least needed columns. */
+@container (max-width: 560px) {
+  .col-move { display: none; }
+}
+@container (max-width: 470px) {
+  .col-behind, .col-extra { display: none; }
+  /* The cell before a dropped last column takes over the card's inset. */
+  .table :is(td, th):has(+ .col-extra:last-child) { padding-right: var(--inset); }
+}
+@container (max-width: 380px) {
+  .col-cat { display: none; }
+}
+/* A narrow rail gives the last-hour column to the team names. */
+@container (max-width: 450px) {
+  .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px 36px; }
+  .rung > :nth-child(5) { display: none; }
+}
+@container (max-width: 460px) {
+  .col-diff, .col-rate { display: none; }
+}
+@container (max-width: 560px) {
+  .col-when { display: none; }
+}
+@container (max-width: 400px) {
+  .col-time { display: none; }
+}
+@container (max-width: 700px) {
+  .viz { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .viz-timeline { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .viz-summary { grid-column: 1 / -1; padding-left: 0; }
+}
+@container (max-width: 460px) {
+  .viz { grid-template-columns: minmax(0, 1fr); }
+  .viz-summary { flex-wrap: wrap; gap: 4px 16px; }
+}
+@container (max-width: 780px) {
+  .col-why { display: none; }
+  .plan-headline { font-size: 20px; }
+}
+/* A wide feed reads as one line per solve. */
+@container (min-width: 560px) {
+  .feed-main { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; }
+  .feed li { padding-block: 0; min-height: var(--row); }
+}
+
+@media (max-width: 1023px) {
+  #view-board { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "standings" "feed"; }
+  .standings-card, .feed-card { max-height: none; }
+  .standings-card .table-scroll, .feed-card .table-scroll { max-height: 560px; }
+  #analysis-body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "versus" "catch" "field" "edge"; }
+  #plan-body, #chal-body { grid-template-columns: minmax(0, 1fr); }
+  .chal-scroll { max-height: 420px; }
+  .targets-card { order: -1; }
+  .targets-card .table-scroll { flex: none; min-height: 0; max-height: 520px; }
+}
+@media (max-width: 760px) {
+  :root { --gutter: 16px; --inset: 16px; }
+  .topbar-inner {
+    grid-template-columns: 1fr auto; height: auto; padding-block: 8px; row-gap: 8px;
+  }
+  .tabs { grid-row: 2; grid-column: 1 / -1; justify-self: start; }
+  .status[data-state="live"] { display: none; }
+  .hide-sm { display: none; }
+  .table :is(td, th):has(+ .hide-sm:last-child) { padding-right: var(--inset); }
+  .chart { height: 280px; }
+  .input { width: 100%; }
+  .card-header.row > .row { width: 100%; }
+  .card-header.row > .row .input-wrap { flex: 1; }
+  .combo { flex: 1; min-width: 180px; }
+  .select { width: 100%; }
+  .chal-form { grid-template-columns: minmax(0, 1fr) auto; }
+  .chal-form .label { grid-column: 1 / -1; }
+  .chal-attempt { grid-column: 1 / -1; }
+  .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px; }
+  .rung > :nth-child(5), .rung > :nth-child(7) { display: none; }
+  /* The rival picker on the Analysis tab covers this on narrow screens. */
+  .btn-compare { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation: none !important; }
+}
+@media (forced-colors: active) {
+  .swatch, .pop-bar > i, .bar > i, .pips i, .timeline-dot, .range-mark, .range-band, .spans-median { forced-color-adjust: none; }
+  tr.on-route td:first-child { box-shadow: none; border-left: 2px solid CanvasText; }
+  button.rung[aria-checked="true"] .radio::after { background: CanvasText; }
+}

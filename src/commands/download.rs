@@ -51,36 +51,76 @@ pub async fn run(config: ResolvedConfig, args: DownloadArgs) -> anyhow::Result<(
 
     // Default to the workspace (folder with ctfd.toml) so running from
     // inside a challenge folder doesn't nest downloads.
-    let output_dir = args
-        .output
-        .clone()
-        .or_else(crate::config::find_workspace_root)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let output_dir = args.output.clone().unwrap_or_else(default_output);
     if args.output.is_none() && output_dir != Path::new(".") {
         let shown = std::fs::canonicalize(&output_dir).unwrap_or_else(|_| output_dir.clone());
         eprintln!("Downloading into workspace {}", shown.display());
     }
 
-    std::fs::create_dir_all(&output_dir).map_err(|e| {
+    let report = fetch_into(client, output_dir, selected, args.force, args.jobs, false).await?;
+
+    if report.challenges > 0 {
+        println!(
+            "Downloaded {n} challenge{s} successfully ({details}).",
+            n = report.challenges,
+            s = plural(report.challenges),
+            details = report.details()
+        );
+    }
+
+    if !report.errors.is_empty() {
+        for err in &report.errors {
+            eprintln!("Error: {err}");
+        }
+        anyhow::bail!(
+            "{} challenge download{} failed.",
+            report.errors.len(),
+            plural(report.errors.len())
+        );
+    }
+
+    Ok(())
+}
+
+/// Where downloads go when no directory is given: the workspace (folder
+/// with `ctfd.toml`), else the current directory.
+pub fn default_output() -> PathBuf {
+    crate::config::find_workspace_root().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// How many challenges are downloaded at once unless told otherwise.
+pub const DEFAULT_JOBS: u32 = 8;
+
+/// Download `selected` into `output`, `jobs` at a time, and report what
+/// happened.  Failures of single challenges are collected in the report
+/// rather than stopping the rest.  With `quiet`, nothing is printed: the
+/// live views call this while they own the screen.
+pub async fn fetch_into(
+    client: Arc<CtfdClient>,
+    output: PathBuf,
+    selected: Vec<Challenge>,
+    force: bool,
+    jobs: u32,
+    quiet: bool,
+) -> anyhow::Result<Report> {
+    std::fs::create_dir_all(&output).map_err(|e| {
         anyhow::anyhow!(
             "Failed to create output directory '{}': {e}",
-            output_dir.display()
+            output.display()
         )
     })?;
 
-    // 3. Download in parallel, bounded by --jobs.
-    let semaphore = Arc::new(Semaphore::new(args.jobs as usize));
-    let output = Arc::new(output_dir);
+    let semaphore = Arc::new(Semaphore::new(jobs.max(1) as usize));
+    let output = Arc::new(output);
     let mut tasks = JoinSet::new();
 
     for (index, ch) in selected.into_iter().enumerate() {
         let client = Arc::clone(&client);
         let semaphore = Arc::clone(&semaphore);
         let output = Arc::clone(&output);
-        let force = args.force;
         tasks.spawn(async move {
             let _permit = semaphore.acquire_owned().await;
-            let result = download_one_challenge(&client, &output, ch.id, force).await;
+            let result = download_one_challenge(&client, &output, ch.id, force, quiet).await;
             (index, ch, result)
         });
     }
@@ -91,38 +131,19 @@ pub async fn run(config: ResolvedConfig, args: DownloadArgs) -> anyhow::Result<(
     }
     results.sort_by_key(|(index, _, _)| *index);
 
-    // 4. Summarize
-    let mut summary = Summary::default();
-    let mut errors: Vec<String> = Vec::new();
-
+    let mut report = Report {
+        dir: output.as_ref().clone(),
+        ..Default::default()
+    };
     for (_, ch, result) in results {
         match result {
-            Ok(outcome) => summary.add(&outcome),
-            Err(e) => errors.push(format!("Challenge {} ({}): {e}", ch.id, ch.name)),
+            Ok(outcome) => report.add(&outcome),
+            Err(e) => report
+                .errors
+                .push(format!("Challenge {} ({}): {e}", ch.id, ch.name)),
         }
     }
-
-    if summary.challenges > 0 {
-        println!(
-            "Downloaded {n} challenge{s} successfully ({details}).",
-            n = summary.challenges,
-            s = plural(summary.challenges),
-            details = summary.details()
-        );
-    }
-
-    if !errors.is_empty() {
-        for err in &errors {
-            eprintln!("Error: {err}");
-        }
-        anyhow::bail!(
-            "{} challenge download{} failed.",
-            errors.len(),
-            plural(errors.len())
-        );
-    }
-
-    Ok(())
+    Ok(report)
 }
 
 /// Whether a challenge passes the `download` filters.
@@ -166,17 +187,23 @@ struct ChallengeOutcome {
     bytes: u64,
 }
 
-/// Aggregate totals across all downloaded challenges.
+/// What a download did: totals over the challenges that worked, and the
+/// errors of those that did not.
 #[derive(Debug, Default)]
-struct Summary {
-    challenges: usize,
-    new: usize,
-    fetched: usize,
-    skipped: usize,
-    bytes: u64,
+pub struct Report {
+    /// Challenges downloaded without error.
+    pub challenges: usize,
+    pub new: usize,
+    pub fetched: usize,
+    pub skipped: usize,
+    pub bytes: u64,
+    /// One line per challenge that failed.
+    pub errors: Vec<String>,
+    /// Where the files went.
+    pub dir: PathBuf,
 }
 
-impl Summary {
+impl Report {
     fn add(&mut self, outcome: &ChallengeOutcome) {
         self.challenges += 1;
         self.new += usize::from(outcome.is_new);
@@ -185,7 +212,8 @@ impl Summary {
         self.bytes += outcome.bytes;
     }
 
-    fn details(&self) -> String {
+    /// The totals in words: `2 new, 5 files fetched, 1.2 MB`.
+    pub fn details(&self) -> String {
         let mut parts = vec![format!("{} new", self.new)];
         parts.push(format!(
             "{} file{} fetched",
@@ -218,6 +246,7 @@ async fn download_one_challenge(
     output: &Path,
     challenge_id: u64,
     force: bool,
+    quiet: bool,
 ) -> anyhow::Result<ChallengeOutcome> {
     let detail = client
         .get_challenge_detail(challenge_id)
@@ -278,10 +307,12 @@ async fn download_one_challenge(
 
     if !attachment_errors.is_empty() {
         let msg = attachment_errors.join("; ");
-        eprintln!(
-            "Warning: Some attachments failed for challenge '{}': {msg}",
-            detail.name
-        );
+        if !quiet {
+            eprintln!(
+                "Warning: Some attachments failed for challenge '{}': {msg}",
+                detail.name
+            );
+        }
         return Err(anyhow::anyhow!("Attachment download errors: {msg}"));
     }
 
@@ -307,7 +338,9 @@ async fn download_one_challenge(
         }
         line.push(')');
     }
-    eprintln!("{line}");
+    if !quiet {
+        eprintln!("{line}");
+    }
 
     Ok(outcome)
 }

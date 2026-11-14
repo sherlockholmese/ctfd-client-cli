@@ -1,7 +1,7 @@
 //! The JSON the web page renders: one self-contained snapshot of the
 //! [`BoardModel`], sent on load and after every change.
 
-use crate::board::analysis::{CategoryRow, ChallengeStat};
+use crate::board::analysis::{self, CategoryRow, ChallengeStat};
 use crate::board::model::{BoardModel, Momentum, Party, account_key};
 use serde::Serialize;
 
@@ -22,11 +22,62 @@ pub struct Snapshot {
     pub updated_at: i64,
     pub refreshing: bool,
     pub error: Option<String>,
+    /// Whether challenge files are being downloaded right now.
+    pub downloading: bool,
+    /// Whether a flag is with the server right now.
+    pub submitting: bool,
+    /// The last flag sent and what came back.
+    pub attempt: Option<Attempt>,
+    /// Every visible challenge, by category, then cheapest first.
+    pub challenges: Vec<ChallengeRow>,
+    /// Descriptions and files of the challenges opened so far, by ID.
+    pub details: std::collections::BTreeMap<u64, ChallengeDetail>,
     pub standings: Vec<Row>,
     pub lines: Vec<Line>,
     pub feed: Vec<Solve>,
     pub h2h: HeadToHead,
     pub plan: Plan,
+    /// What just happened, oldest first; the page shows each `id` once.
+    pub notices: Vec<Notice>,
+}
+
+#[derive(Serialize)]
+pub struct Attempt {
+    pub id: u64,
+    pub solved: bool,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct ChallengeRow {
+    pub id: u64,
+    pub name: String,
+    pub category: String,
+    pub value: i64,
+    pub solves: Option<u64>,
+    pub solved: bool,
+    /// Whether it has a folder in the workspace.
+    pub on_disk: bool,
+}
+
+#[derive(Serialize)]
+pub struct ChallengeDetail {
+    pub description: String,
+    pub connection_info: Option<String>,
+    pub files: Vec<String>,
+    pub tags: Vec<String>,
+    pub max_attempts: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct Notice {
+    pub id: u64,
+    /// `your_solve`, `solve`, `rank_up`, `rank_down`, `failed`,
+    /// `recovered`, `downloading`, `downloaded`, `flag_accepted` or
+    /// `flag_rejected`.
+    pub kind: &'static str,
+    pub title: String,
+    pub detail: String,
 }
 
 #[derive(Serialize)]
@@ -109,6 +160,9 @@ pub struct Challenge {
     pub value: i64,
     pub solves: Option<u64>,
     pub top_solves: usize,
+    /// How far into the CTF it was solved, in words, by whoever the list
+    /// is about (the rival for catch-up, you for your edge).
+    pub solved_in: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -145,6 +199,18 @@ pub struct Plan {
     pub ladder: Vec<Rung>,
     pub targets: Vec<Target>,
     pub focus: Vec<Focus>,
+    /// Rank of the team to aim for first.
+    pub goal: Option<i64>,
+    /// How targets off the route are ordered: `likely`, `per_hour`,
+    /// `odds`, `points` or `time`.
+    pub sort: &'static str,
+    /// Your points per hour over the last three hours.
+    pub my_pace: Option<f64>,
+    /// How often you solve against the field, and whether you are
+    /// closing on the goal, in words.
+    pub pace_note: String,
+    /// The orders the targets can be put in: key and name.
+    pub sorts: Vec<(&'static str, &'static str)>,
 }
 
 #[derive(Serialize)]
@@ -156,9 +222,19 @@ pub struct Rung {
     /// Points ahead of you (negative: behind you).
     pub ahead: i64,
     pub momentum: Option<Pace>,
-    /// Best targets needed to pass them.
+    /// Solves on the likeliest route past them, and the points it brings.
     pub solves: Option<usize>,
     pub points: Option<i64>,
+    /// Challenge IDs on that route, likeliest first.
+    pub route: Vec<u64>,
+    /// Chance of landing the whole route (0..=1).
+    pub odds: Option<f64>,
+    /// Your time for the whole route, in words.
+    pub time: Option<String>,
+    /// Points per hour over the last three hours.
+    pub pace: Option<f64>,
+    /// Time until you draw level at both current paces, in words.
+    pub catch_in: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -166,11 +242,77 @@ pub struct Target {
     #[serde(flatten)]
     pub challenge: Challenge,
     pub share: f64,
+    /// `easy`, `medium`, `hard` or `extreme`, and the word to show.
+    pub difficulty: &'static str,
+    pub difficulty_label: &'static str,
+    /// Whether the difficulty is the organisers' tag, not an estimate.
+    pub difficulty_tagged: bool,
+    /// Your estimated chance of solving it (0..=1).
+    pub odds: f64,
     pub expected: f64,
+    /// Solves in the last hour by accounts whose solves are known.
+    pub recent: usize,
+    /// Why it stands out: `quick_win`, `trending`, `strength`, `rival`
+    /// or `unsolved`.
+    pub reason: Option<&'static str>,
+    /// The same, as the words to show.
+    pub why: Option<String>,
+    /// How long it should take you, in words, and whether that is a
+    /// guess from its difficulty.
+    pub time: Option<String>,
+    pub time_guessed: bool,
+    /// Likely points per hour of that time.
+    pub per_hour: Option<f64>,
+    /// Everything known about it, as labelled lines (the text behind the
+    /// drawn details).
+    pub facts: Vec<Fact>,
+    /// The same as numbers, for drawing.
+    pub stats: Stats,
     pub running: i64,
     pub reach: i64,
     /// Name of the best-ranked account this solve takes you past.
     pub passes: Option<String>,
+}
+
+/// One target's signals as numbers.  Times are seconds; `*_text` are the
+/// same in words.
+#[derive(Serialize)]
+pub struct Stats {
+    /// Seconds from the start of scoring to now.
+    pub elapsed: i64,
+    /// Each tracked solve: seconds into the CTF, who, and that in words.
+    pub solves: Vec<(i64, String, String)>,
+    pub latest_text: Option<String>,
+    pub last_hour: usize,
+    pub last_3h: usize,
+    /// `[solved, out of]` over the field, the graphed top, and the
+    /// tracked teams ahead of you.
+    pub field: Option<(u64, usize)>,
+    pub top: (usize, usize),
+    pub ahead: (usize, usize),
+    pub odds_low: f64,
+    pub odds_high: f64,
+    /// What it took the tracked teams: shortest, lower quartile, median,
+    /// upper quartile, longest.
+    pub spans: Option<[i64; 5]>,
+    pub samples: usize,
+    pub typical_text: Option<String>,
+    /// Your time.
+    pub time: Option<i64>,
+    /// `[solved by you, challenges]` in its category, and the field's
+    /// average solve share there.
+    pub category: (usize, usize),
+    pub category_share: f64,
+    /// 0 (easy) to 3 (extreme).
+    pub level: u8,
+}
+
+#[derive(Serialize)]
+pub struct Fact {
+    pub label: String,
+    pub value: String,
+    /// A long value that wants a line of its own.
+    pub wide: bool,
 }
 
 #[derive(Serialize)]
@@ -179,6 +321,9 @@ pub struct Focus {
     pub open: usize,
     pub points: i64,
     pub expected: f64,
+    /// Challenges of the category you have solved, and how many it has.
+    pub mine: usize,
+    pub total: usize,
 }
 
 fn pace(m: Option<Momentum>) -> Option<Pace> {
@@ -200,8 +345,9 @@ fn side(p: &Party, momentum: Option<Momentum>) -> Side {
     }
 }
 
-fn challenge(c: &ChallengeStat) -> Challenge {
+fn challenge(c: &ChallengeStat, start: i64) -> Challenge {
     Challenge {
+        solved_in: c.at.map(|t| analysis::span_text(t - start)),
         id: c.id,
         name: c.name.clone(),
         category: c.category.clone(),
@@ -220,6 +366,53 @@ fn category(c: &CategoryRow) -> Category {
         mine_points: c.mine_points,
         theirs: c.theirs,
         theirs_points: c.theirs_points,
+    }
+}
+
+fn stats(t: &analysis::Target, plan: &crate::board::model::Plan, now: i64) -> Stats {
+    let (field, start, ahead_tracked) = plan.context().unwrap_or((
+        analysis::Field {
+            ranked: 0,
+            top_n: 0,
+        },
+        now,
+        0,
+    ));
+    let timing = &t.timing;
+    let spans = timing
+        .extent()
+        .zip(timing.typical())
+        .map(|((min, max), median)| {
+            let (q1, q3) = timing.spread().unwrap_or((min, max));
+            [min, q1, median, q3, max]
+        });
+    Stats {
+        elapsed: (now - start).max(1),
+        solves: timing
+            .times
+            .iter()
+            .zip(&timing.solvers)
+            .map(|(&at, who)| (at - start, who.clone(), analysis::span_text(at - start)))
+            .collect(),
+        latest_text: timing.last().map(|at| analysis::span_text(now - at)),
+        last_hour: timing.recent(now, 3600),
+        last_3h: timing.recent(now, 3 * 3600),
+        field: t
+            .stat
+            .solves
+            .filter(|_| field.ranked > 0)
+            .map(|n| (n, field.ranked)),
+        top: (t.stat.top_solves, field.top_n),
+        ahead: (t.ahead, ahead_tracked),
+        odds_low: t.odds_range.0,
+        odds_high: t.odds_range.1,
+        spans,
+        samples: timing.spans.len(),
+        typical_text: timing.typical().map(analysis::span_text),
+        time: t.time,
+        category: t.category_record,
+        category_share: t.category_share,
+        level: t.difficulty.level as u8,
     }
 }
 
@@ -288,6 +481,7 @@ impl Snapshot {
             })
             .collect();
 
+        let start = model.plan.start;
         let h = &model.h2h;
         let c = &h.comparison;
         let gap = match (&h.me, &h.rival) {
@@ -308,12 +502,12 @@ impl Snapshot {
                     .is_some_and(|(me, n)| me.pos <= i64::from(n)),
             }),
             categories: c.categories.iter().map(category).collect(),
-            catch_up: c.catch_up.iter().map(challenge).collect(),
+            catch_up: c.catch_up.iter().map(|c| challenge(c, start)).collect(),
             catch_up_points: c.catch_up_points(),
             closes_gap_at: c.gap_closing_index(gap),
-            edge: c.edge.iter().map(challenge).collect(),
+            edge: c.edge.iter().map(|c| challenge(c, start)).collect(),
             edge_points: c.edge_points(),
-            field: c.field.iter().map(challenge).collect(),
+            field: c.field.iter().map(|c| challenge(c, start)).collect(),
         };
 
         let p = &model.plan;
@@ -330,15 +524,40 @@ impl Snapshot {
                     momentum: pace(r.momentum),
                     solves: r.to_pass.map(|(n, _)| n),
                     points: r.to_pass.map(|(_, pts)| pts),
+                    route: r.route.clone(),
+                    odds: r.route_odds,
+                    time: r.route_time.map(analysis::span_text),
+                    pace: r.pace,
+                    catch_in: r.catch_in.map(analysis::span_text),
                 })
                 .collect(),
             targets: p
-                .targets
-                .iter()
+                .listed()
+                .into_iter()
                 .map(|t| Target {
-                    challenge: challenge(&t.stat),
+                    challenge: challenge(&t.stat, start),
+                    time: t.time.map(analysis::span_text),
+                    time_guessed: t.time_guessed,
+                    per_hour: t.per_hour,
+                    stats: stats(t, p, model.now),
+                    facts: p
+                        .facts(t, model.now)
+                        .into_iter()
+                        .map(|f| Fact {
+                            label: f.label,
+                            value: f.value,
+                            wide: f.wide,
+                        })
+                        .collect(),
                     share: t.share,
+                    difficulty: t.difficulty.level.key(),
+                    difficulty_label: t.difficulty.level.label(),
+                    difficulty_tagged: t.difficulty.tagged,
+                    odds: t.odds,
                     expected: t.expected,
+                    recent: t.recent,
+                    reason: t.reason.map(|r| r.key()),
+                    why: t.why(),
                     running: t.running,
                     reach: t.reach,
                     passes: t.passes.as_ref().map(|(_, name)| name.clone()),
@@ -352,7 +571,17 @@ impl Snapshot {
                     open: f.open,
                     points: f.points,
                     expected: f.expected,
+                    mine: f.mine,
+                    total: f.total,
                 })
+                .collect(),
+            goal: p.goal,
+            sort: p.sort.key(),
+            my_pace: p.my_pace,
+            pace_note: p.pace_note(),
+            sorts: analysis::Sort::ALL
+                .iter()
+                .map(|s| (s.key(), s.label()))
                 .collect(),
         };
 
@@ -368,11 +597,56 @@ impl Snapshot {
             updated_at: model.updated_at.timestamp(),
             refreshing: model.refreshing,
             error: model.error.clone(),
+            downloading: model.downloading,
+            submitting: model.submitting,
+            attempt: model.attempt.as_ref().map(|a| Attempt {
+                id: a.id,
+                solved: a.solved,
+                message: a.message.clone(),
+            }),
+            challenges: model
+                .challenge_list()
+                .into_iter()
+                .map(|c| ChallengeRow {
+                    id: c.id,
+                    name: c.name.clone(),
+                    category: c.category.clone(),
+                    value: c.value,
+                    solves: c.solves,
+                    solved: c.solved_by_me,
+                    on_disk: model.on_disk.contains(&c.id),
+                })
+                .collect(),
+            details: model
+                .details
+                .iter()
+                .map(|(id, d)| {
+                    (
+                        *id,
+                        ChallengeDetail {
+                            description: d.description.clone(),
+                            connection_info: d.connection_info.clone(),
+                            files: d.files.clone(),
+                            tags: d.tags.clone(),
+                            max_attempts: d.max_attempts,
+                        },
+                    )
+                })
+                .collect(),
             standings,
             lines,
             feed,
             h2h,
             plan,
+            notices: model
+                .live_notices()
+                .map(|n| Notice {
+                    id: n.id,
+                    kind: n.kind.key(),
+                    title: n.title.clone(),
+                    detail: n.detail.clone(),
+                })
+                .collect(),
         }
     }
 }

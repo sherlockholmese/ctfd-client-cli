@@ -270,7 +270,7 @@ async fn the_web_board_works_on_rctf() {
     write_config(dir.path(), &server);
 
     let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("ctfdc"))
-        .args(["lb", "--web", "--no-open", "--port", "0"])
+        .args(["web", "--no-open", "--port", "0"])
         .env_remove("CTFD_URL")
         .env_remove("CTFD_TOKEN")
         .current_dir(dir.path())

@@ -1,4 +1,4 @@
-//! A deterministic, fictional CTF for `ctfdc lb --demo`.
+//! A deterministic, fictional CTF for the `--demo` flag of `ctfdc lb`, `tui` and `web`.
 //!
 //! Lets the scoreboard UI be checked before a CTF starts (or offline):
 //! 36 fictional teams play 30 fictional challenges with CTFd-style
@@ -251,13 +251,19 @@ impl DemoWorld {
         let challenges = CHALLENGES
             .iter()
             .enumerate()
-            .map(|(c, &(name, category, _, _, _))| Challenge {
+            .map(|(c, &(name, category, _, hardness, _))| Challenge {
                 id: c as u64 + 1,
                 name: name.to_string(),
                 category: category.to_string(),
                 value: self.value(c),
                 solved_by_me: self.solves.iter().any(|&(t, ch, _)| t == me && ch == c),
                 solves: Some(self.solve_count(c)),
+                // Some organisers tag difficulty, most leave gaps.
+                tags: match hardness {
+                    h if h < 0.1 => vec!["easy".into()],
+                    h if h > 0.9 => vec!["hard".into()],
+                    _ => Vec::new(),
+                },
             })
             .collect();
 

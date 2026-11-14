@@ -1095,3 +1095,50 @@ fn invalid_since_in_ctfd_toml_is_reported() {
         .failure()
         .stderr(predicate::str::contains("invalid since value"));
 }
+
+// The drawn scoreboard: what a terminal gets, forced here with --color.
+
+#[tokio::test]
+async fn color_always_draws_the_scoreboard() {
+    let server = MockServer::start().await;
+    mount_board(&server).await;
+    let out = ctfd()
+        .args(["--url", &server.uri(), "--token", "t"])
+        .args(["lb", "--color", "always", "--cutoff", "1"])
+        .current_dir(tempfile::tempdir().unwrap().path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("\x1b["), "coloured");
+    for needle in ["ctfdc", "top 1 qualify", "█", "Score", "Behind"] {
+        assert!(text.contains(needle), "missing {needle:?}\n{text}");
+    }
+}
+
+#[test]
+fn demo_prints_a_fictional_scoreboard_without_a_server() {
+    ctfd()
+        .args(["lb", "--demo", "--top", "3"])
+        .env_remove("CTFD_URL")
+        .env_remove("CTFD_TOKEN")
+        .current_dir(tempfile::tempdir().unwrap().path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Heap Hoppers"))
+        .stdout(predicate::str::contains("Null Pointers"))
+        .stdout(predicate::str::contains("<- you"));
+}
+
+#[test]
+fn live_views_are_separate_commands() {
+    // Without a terminal the live terminal view says what to run instead.
+    ctfd()
+        .args(["tui", "--demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ctfdc lb"))
+        .stderr(predicate::str::contains("ctfdc web"));
+}

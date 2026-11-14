@@ -24,7 +24,9 @@ Running `ctfdc` with no arguments prints this quick start, and every command has
 | `status` | `ls`, `st` | Challenges by category with IDs, solved state and progress |
 | `download` | `dl` | Download challenges and attachments (safe to re-run) |
 | `submit` | `s` | Submit flags by folder, ID, or name |
-| `leaderboard` | `lb`, `scoreboard` | Live scoreboard with graph and rival analysis (`--web` for the browser, `--print` for text) |
+| `leaderboard` | `lb`, `scoreboard` | Print the scoreboard |
+| `tui` | `live` | Live scoreboard in the terminal with graph, rival analysis and a plan of what to solve next |
+| `web` | `ui` | The same in your browser |
 | `completions <SHELL>` | | Shell completion script |
 
 ## Setup
@@ -55,7 +57,7 @@ Precedence: `--url`/`--token` > `CTFD_URL`/`CTFD_TOKEN` > nearest `ctfd.toml`. T
 ctfdc init 'https://ctf.example.com/login?token=...'
 ```
 
-`init` recognises rCTF on its own (by its public client config) and saves `platform = "rctf"` with your team token in `ctfd.toml`; `--platform rctf` (or `CTFD_PLATFORM`) forces it. Every command then works the same: `ls`, `dl`, `s`, and `lb` in the terminal or `--web`. rCTF challenge and team IDs are strings, so `ctfdc` shows a stable number for each (submit by folder or name as usual). Attachments are downloaded without your token, since rCTF serves them from public storage.
+`init` recognises rCTF on its own (by its public client config) and saves `platform = "rctf"` with your team token in `ctfd.toml`; `--platform rctf` (or `CTFD_PLATFORM`) forces it. Every command then works the same: `ls`, `dl`, `s`, `lb`, `tui` and `web`. rCTF challenge and team IDs are strings, so `ctfdc` shows a stable number for each (submit by folder or name as usual). Attachments are downloaded without your token, since rCTF serves them from public storage.
 
 Tab completion means fewer things to remember:
 
@@ -162,48 +164,76 @@ Exit codes: `0` correct or already solved, `2` incorrect, `1` errors (network, u
 ## Scoreboard
 
 ```sh
-ctfdc lb                 # live full-screen scoreboard
-ctfdc lb --print         # print once as text (-p; also what you get when piped)
-ctfdc lb --demo          # try the live view on fictional, simulated data
+ctfdc lb                 # print the scoreboard
+ctfdc lb --top 20        # the top 20, and your row
+ctfdc lb --plain         # bare text (-p; also what you get when piped)
+ctfdc lb --demo          # a fictional scoreboard, no server needed
 ```
 
-The live view updates every 15 seconds (`-n SECS`), keeps the last good data on screen if an update fails, and has three tabs (`Tab` switches):
+`ctfdc lb` prints the scoreboard once: rank, team, score and points behind the team above, with your row marked and the qualifying line drawn. On a terminal it is drawn with colour, a score bar per team and a line on where you stand (how far behind the team above, ahead of the team below, and from the qualifying line). Piped, or with `--plain`, it is bare aligned text for scripts. `--color always|never` overrides the choice, and `NO_COLOR` is respected.
 
-- **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `l` switches layout.
+The live views are their own commands: `ctfdc tui` in the terminal and `ctfdc web` in your browser. They show the same tabs, sections and numbers.
+
+## Live views
+
+```sh
+ctfdc tui                # live scoreboard, analysis and planning in the terminal
+ctfdc web                # the same in your browser
+ctfdc tui --demo         # try either on fictional, simulated data
+```
+
+Both update every 15 seconds (`-n SECS`), keep the last good data on screen if an update fails, and have four tabs (`Tab` switches in the terminal):
+
+- **Board**: standings with points behind the team above and each team's rank/score movement over the last 15 minutes, a score-over-time graph of the top 10 (`--top N`; graphed teams' names are drawn in their line color), and the latest solves as they happen. `Enter` adds any team to the graph, `/` finds a team, `m` jumps to you, `t` steps the graph's range (all, 24h down to 30m), `l` switches layout (split, graph only, tables only).
 - **Analysis**: you against a rival (the team above you by default; `<-`/`->` changes it). The first two lines say where you stand and what to do: how far behind or ahead you are, your margin to the qualifying line, and how many catch-up challenges it takes to pass them. Below that:
-  - **Catch up**: challenges the rival solved and you haven't, most-solved first, with a running total and a line where you'd pass them.
-  - **Open for both**: challenges neither of you has solved, ranked by how many of the top teams solved them.
+  - **Catch-up targets**: challenges the rival solved and you haven't, most-solved first, with a running total and a line where you'd pass them.
+  - **Unsolved by both**: challenges neither of you has solved, ranked by how many of the top teams solved them.
   - **Head to head**: score, solves, points in the last hour / 3 hours, time since the last solve.
   - **Points by category**: a radar of the share of each category's points you and the rival hold, with the raw numbers on hover (web) and the biggest gaps underneath (terminal).
-  - **Your edge**: challenges you have that they don't.
+  - **Your edge**: challenges you have that they don't. Catch-up targets and your edge also show how far into the CTF the rival, or you, solved each one.
 - **Plan**: you against the whole board, for deciding what to work on next (`3` or `Tab` again).
-  - **Best targets**: every challenge you haven't solved, ranked by expected points (points × the share of teams that solved it), with a running total and the rank you would reach, if nobody else scores.
-  - **Path to the top**: the top 3, the teams just above you and the two just behind, each with the gap, their last hour, and how many of your best targets it takes to pass them.
-  - **Where to focus**: categories by the expected points still open.
+  - **Aim for**: the top 3, the teams just above you and the two just behind (and the last qualifying place), each with the gap, their last hour, and the solves and odds of the likeliest route past them. One of the teams ahead is the goal: by default the last qualifying place when you are outside it, else the team above you. `<-`/`->` moves it, `m` goes back to the default; in the browser, click a team.
+  - **The answer**: one line saying what it takes to pass the goal, for example "3 solves to reach top 4, +931 points, 5% chance of landing all". The route is the set of solves most likely to all land that gains enough points.
+  - **Best targets**: the route first, in the order to try it, then every other challenge you haven't solved, ranked by expected points: its points × your odds of solving it. The odds start from the share of teams that solved it, weighed against the challenge's difficulty, and shift with your record in its category (a category you solve more of than your average counts for you, one you solve less of against). A challenge nobody has solved is unlikely, not impossible. Difficulty (Easy, Medium, Hard, Extreme) is the organisers' tag when a challenge has one (`easy`, `medium`, `hard`, `insane` and the like), else an estimate from how few teams solved it and where its points sit among the others; estimates are shown more quietly than tags. Early in a CTF, before the solve counts mean much, difficulty is what orders the targets. Each target can say why it stands out: a quick win, solved several times in the last hour, in your category, already solved by your rival, or not solved by anyone.
+  - **Where to focus**: categories by the expected points still open, with how many of each you have solved.
+  - **Time and points per hour**: each target shows how long it should take you and the likely points per hour of that time. The time is what the challenge took the teams that solved it (the gap since each team's previous solve, taking the median), scaled by how fast you solve against them; when no tracked team has solved it, it is guessed from the difficulty and marked `~`. `s` (or a column heading in the browser) orders the targets by likely points, likely points per hour, odds, points or time; the route stays on top.
+  - **Details**: the highlighted target (`↑`/`↓`, or click it) has everything known about it drawn under the list: a timeline from the start of the CTF to now with a mark for each tracked team's solve (the last hour shaded), bars for how widely it is solved, your odds as a mark inside their plausible range, and the time it took the others as a line (shortest to longest), a box (the middle half) and a tick (the median) with your own time marked on it. In numbers, that covers: how many teams and how many of the top N solved it, how many of the teams ahead of you have it, the odds with their plausible range, its difficulty, the first and latest solve, solves in the last hour and 3 hours, the typical time with its spread, your time, your record in the category against the field's, and how far into the CTF each tracked team solved it.
+  - **Pace**: the ladder shows each team's points per hour over the last 3 hours beside yours, and a line under it says how often you solve against the tracked teams and when you would draw level with the goal at those paces.
 
-Press `?` in the live view for every key.
+Solve times are known for the teams whose solves are tracked: the graphed top N, pinned teams, you and your rival. "Into the CTF" counts from `since` when it is set, else from the earliest solve seen.
+
+- **Challenges** (`4`): every visible challenge, by category, with what you have solved and what is already downloaded to your workspace. `u` keeps only those left to solve and `/` finds one by name. The highlighted challenge shows its description (as plain text), connection details, files and tags.
+  - **Submit a flag**: `f` (or the flag field in the browser), then `Enter`. The server's answer shows beside the challenge and as a notification; an accepted flag counts at once in Plan and Analysis. Rate limits are reported, not waited out: send it again when the server allows. This is `ctfdc s`, so a downloaded copy's `metadata.json` is marked solved too.
+  - **Download**: `d` fetches the highlighted challenge (here or on Plan) and `D` every visible challenge; the browser has a **Download** button beside the challenge and one in the top bar. This is `ctfdc dl`: files go to the folder with `ctfd.toml` (else the current folder), attachments already on disk are skipped, and a notification says what was fetched and where. In the browser the download is done by ctfdc on your machine, so the files land in your workspace, not in the browser's downloads.
+  - On Plan, `o` (or **Open** in the browser) shows the highlighted target here.
+
+Both views show a notification in the bottom right corner when something happens: a new solve (several at once are summed up), your own solve, your rank moving up or down, and an update failing or working again. Each stays for a few seconds.
+
+The browser and the terminal show the same tabs, sections and numbers, laid out the same way, and share their keys: `1` `2` `3` `4` for the tabs, `r` to update now, `/` to find a team, `m`, `<-`/`->`, `t`, `l` as above, and `?` for the list.
 
 ### In the browser
 
 ```sh
-ctfdc lb --web                       # serve the live scoreboard and open it in your browser (-w)
-ctfdc lb --web --demo                # the same on fictional data
-ctfdc lb --web --port 8080 --no-open # fixed port, print the link instead of opening it
+ctfdc web                       # serve the live scoreboard and open it in your browser
+ctfdc web --demo                # the same on fictional data
+ctfdc web --port 8080 --no-open # fixed port, print the link instead of opening it
 ```
 
-The web view shows the same Board, Analysis and Plan as the terminal, with an interactive score graph (hover for everyone's score at that moment, ranges from `All` down to the last `30m`, click a legend entry to hide a line). Hovering a team in the standings highlights its line. `Compare` on any row opens Analysis against that team, and the pin button adds a team outside the top N to the graph. It follows your system's light/dark setting, and the sun/moon button switches it. `--since`, `--cutoff`, `--top` and `-n` work as in the terminal.
+`ctfdc web` (alias `ui`) takes the live views' options (`-n`, `--top`, `--cutoff`, `--since`, `--demo`) plus where to serve: `--port`, `--bind` and `--no-open`. Where no browser can be opened (over SSH, or on Linux without a desktop session or `xdg-open`) it prints the link for you to open. Earlier versions served the page with `ctfdc lb --web`; that is now `ctfdc web`.
 
-The server listens on `127.0.0.1` only (`--bind ADDR` to change it; ctfdc warns when it isn't a loopback address). It makes every CTFd request itself, so your API token never reaches the browser. Each run prints a new link ending in `#k=<key>`, and the page only works with that key, so other users on the machine and other sites in your browser can't read or change the board. To view it from another machine, forward the port over SSH (`ssh -L 8080:127.0.0.1:8080 host`, then run with `--port 8080`). Charts use the vendored [Apache ECharts](https://echarts.apache.org/) 5.6.0 (`assets/web/vendor`, Apache-2.0), so the page needs no internet access.
+The web view shows the same Board, Analysis and Plan as the terminal, with an interactive score graph (hover for everyone's score at that moment, ranges from `All` down to the last `30m`, click a legend entry to hide a line). Hovering a team in the standings highlights its line. `Compare` on any row opens Analysis against that team, and the pin button adds a team outside the top N to the graph. On a desktop-sized window (at least 1024 × 640) each tab fits the window: the page itself never scrolls, only the lists inside it do. Smaller windows stack the same sections and scroll. It follows your system's light/dark setting, and the sun/moon button switches it.
+
+The server listens on `127.0.0.1` only (`--bind ADDR` to change it; ctfdc warns when it isn't a loopback address). It makes every CTFd request itself, so your API token never reaches the browser. Each run prints a new link ending in `#k=<key>`, and the page only works with that key, so other users on the machine and other sites in your browser can't read or change the board. To view it from another machine, forward the port over SSH (`ssh -L 8080:127.0.0.1:8080 host`, then run with `--port 8080`, which serves the page and prints the link). Charts use the vendored [Apache ECharts](https://echarts.apache.org/) 5.6.0 (`assets/web/vendor`, Apache-2.0), so the page needs no internet access.
 
 ### Qualifying line
 
-Set how many places qualify in `ctfd.toml` and the scoreboard draws the line under that place (live view, Analysis, `--print`, and `--demo`):
+Set how many places qualify in `ctfd.toml` and the scoreboard draws the line under that place (the printed scoreboard, both live views, and `--demo`):
 
 ```toml
 cutoff = 20
 ```
 
-`ctfdc init <url> --cutoff 20` writes it for you, and `ctfdc lb --cutoff N` overrides it for one run. `qualify = 20` is accepted as a synonym.
+`ctfdc init <url> --cutoff 20` writes it for you, and `--cutoff N` on `ctfdc lb`, `tui` or `web` overrides it for one run. `qualify = 20` is accepted as a synonym.
 
 ### Counting points from a set time
 
@@ -214,7 +244,7 @@ since = 2026-11-07T09:00:00+08:00   # without an offset it is local time
 # since = "2026-11-07 09:00"         # strings and Unix seconds work too
 ```
 
-`ctfdc lb --since '2026-11-07 09:00'` overrides it for one run. Ties go to whoever reached the score first, as on CTFd. The re-ranked board is computed from `/api/v1/scoreboard/top/N`, so only accounts CTFd lists on the scoreboard are included.
+`--since '2026-11-07 09:00'` on `ctfdc lb`, `tui` or `web` overrides it for one run. Ties go to whoever reached the score first, as on CTFd. The re-ranked board is computed from `/api/v1/scoreboard/top/N`, so only accounts CTFd lists on the scoreboard are included.
 
 ## Test / Validation
 

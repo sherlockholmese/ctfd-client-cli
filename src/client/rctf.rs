@@ -485,6 +485,7 @@ pub(super) async fn challenges(client: &CtfdClient) -> Result<Vec<Challenge>, Ct
             category: c.category,
             value: c.points.unwrap_or(0),
             solves: c.solves,
+            tags: c.tags.unwrap_or_default(),
         })
         .collect())
 }

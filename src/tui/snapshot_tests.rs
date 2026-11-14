@@ -178,13 +178,16 @@ fn analysis_wide_shows_every_section() {
         "behind #5",
         "clear of the cut-off",
         "To pass: top",
-        "Catch up",
+        "Catch-up targets",
         "↑ enough to pass",
         "Head to head",
         "Last hour",
         "Points by category",
-        "Open for both",
+        "Unsolved by both",
         "Your edge",
+        // How far into the CTF the rival, and you, solved things.
+        "Rival at",
+        "You at",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
     }
@@ -197,7 +200,7 @@ fn analysis_narrow_keeps_primary_sections() {
     let buf = draw(&mut app, 100, 30);
     export("analysis-100x30", &buf);
     let t = text(&buf);
-    assert!(t.contains("Catch up"));
+    assert!(t.contains("Catch-up targets"));
     assert!(t.contains("Points by category"));
 }
 
@@ -315,12 +318,27 @@ fn plan_ranks_targets_and_the_climb() {
     export("plan-100x30", &draw(&mut app, 100, 30));
     let t = text(&buf);
     for needle in [
-        "#6 Null Pointers",
-        "behind #1 Heap Hoppers",
+        "2 solves to pass #5",
+        "chance of landing all",
+        "Level",
+        "Pace",
+        "Time",
+        "You solve about every",
+        // The highlighted target's details, solve times included.
+        "●",
+        "solves   first",
+        "Solved by",
+        "Your odds",
+        "likely 2",
+        "Time taken",
+        "typically",
+        "▲",
+        "Solved at",
         "Best targets",
         "↑ passes",
-        "Path to the top",
+        "Aim for",
         "Where to focus",
+        "Quick win",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
     }
@@ -337,9 +355,238 @@ fn plan_ranks_targets_and_the_climb() {
     let ranks: Vec<i64> = plan.ladder.iter().map(|r| r.pos).collect();
     assert_eq!(ranks, [1, 2, 3, 4, 5, 7, 8]);
 
-    // Tab cycles Board -> Analysis -> Plan -> Board.
+    // s orders the targets off the route; the route stays first.
+    use crate::board::analysis::Sort;
+    app.on_key(key(KeyCode::Char('s')));
+    assert_eq!(app.board.plan.sort, Sort::PerHour);
+    let listed = app.board.plan.listed();
+    let rest = &listed[app.board.plan.route().len()..];
+    assert!(
+        rest.windows(2)
+            .all(|w| w[0].per_hour.unwrap_or(0.0) >= w[1].per_hour.unwrap_or(0.0)),
+        "best points per hour first"
+    );
+    assert!(text(&draw(&mut app, 160, 44)).contains("/h↓"));
+    for _ in 0..4 {
+        app.on_key(key(KeyCode::Char('s')));
+    }
+    assert_eq!(app.board.plan.sort, Sort::Likely);
+    let plan = &app.board.plan;
+
+    // The route leads the list, and <- moves the goal up the board.
+    assert_eq!(plan.goal, Some(5));
+    assert_eq!(plan.route().len(), 2);
+    app.on_key(key(KeyCode::Left));
+    assert_eq!(app.board.plan.goal, Some(4));
+    for _ in 0..10 {
+        app.on_key(key(KeyCode::Left));
+    }
+    assert_eq!(app.board.plan.goal, Some(1));
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("to pass #1 Heap Hoppers"), "{t}");
+    export("plan-goal-160x44", &draw(&mut app, 160, 44));
+    app.on_key(key(KeyCode::Char('m')));
+    assert_eq!(app.board.plan.goal, Some(5));
+
+    // Tab cycles Board -> Analysis -> Plan -> Challenges -> Board.
+    app.on_key(key(KeyCode::Tab));
+    assert_eq!(app.view, View::Challenges);
     app.on_key(key(KeyCode::Tab));
     assert_eq!(app.view, View::Board);
     app.on_key(key(KeyCode::BackTab));
+    assert_eq!(app.view, View::Challenges);
+    app.on_key(key(KeyCode::BackTab));
     assert_eq!(app.view, View::Plan);
+}
+
+#[test]
+fn download_keys_ask_for_the_target_or_everything() {
+    use crate::board::model::{Cmd, Download};
+    let mut app = demo_app(None);
+    // d needs a highlighted target, so it only works on Plan.
+    assert_eq!(app.on_key(key(KeyCode::Char('d'))), None);
+    assert_eq!(
+        app.on_key(key(KeyCode::Char('D'))),
+        Some(Cmd::Download(Download::All))
+    );
+    app.on_key(key(KeyCode::Char('3')));
+    app.on_key(key(KeyCode::Down));
+    let second = app.board.plan.listed()[1].stat.id;
+    assert_eq!(
+        app.on_key(key(KeyCode::Char('d'))),
+        Some(Cmd::Download(Download::One(second)))
+    );
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("d download") && t.contains("D all"), "{t}");
+
+    // While one runs, another cannot start; both ends are announced.
+    app.apply(Update::Downloading("Downloading 3 challenges".into()));
+    assert_eq!(app.on_key(key(KeyCode::Char('D'))), None);
+    assert!(text(&draw(&mut app, 160, 44)).contains("Downloading 3 challenges"));
+    app.apply(Update::Downloaded {
+        ok: true,
+        title: "Downloaded 3 challenges".into(),
+        detail: "1 new, 2 files fetched".into(),
+    });
+    let buf = draw(&mut app, 160, 44);
+    export("download-160x44", &buf);
+    let t = text(&buf);
+    assert!(t.contains("Downloaded 3 challenges") && t.contains("1 new, 2 files fetched"));
+    assert!(app.on_key(key(KeyCode::Char('D'))).is_some());
+}
+
+#[tokio::test]
+async fn demo_data_has_nothing_to_download() {
+    use crate::board::model::Download;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::board::request_download(None, Download::All, &tx);
+    let mut app = demo_app(None);
+    app.apply(rx.recv().await.unwrap());
+    assert!(!app.board.downloading);
+    assert!(text(&draw(&mut app, 160, 44)).contains("Demo data has no challenge files"));
+}
+
+#[test]
+fn graph_range_cycles_and_names_itself() {
+    let mut app = demo_app(None);
+    assert!(text(&draw(&mut app, 160, 44)).contains("Score over time"));
+    app.on_key(key(KeyCode::Char('t')));
+    assert!(text(&draw(&mut app, 160, 44)).contains("Score over time, last 24h"));
+    for _ in 0..6 {
+        app.on_key(key(KeyCode::Char('t')));
+    }
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(!t.contains(", last "), "back to the whole graph\n{t}");
+}
+
+#[test]
+fn notices_show_in_the_corner_when_something_happens() {
+    let mut app = demo_app(None);
+    assert_eq!(app.board.live_notices().count(), 0, "nothing new on load");
+
+    app.apply(Update::Failed("server said no".into()));
+    let buf = draw(&mut app, 160, 44);
+    export("notice-160x44", &buf);
+    let t = text(&buf);
+    assert!(t.contains("Couldn't update the scoreboard"), "{t}");
+    assert!(t.contains("server said no"));
+    // A second failure in a row is not news.
+    app.apply(Update::Failed("server said no".into()));
+    assert_eq!(app.board.live_notices().count(), 1);
+
+    let world = demo::DemoWorld::new(series::now());
+    app.apply(Update::Data(Box::new(world.snapshot(10, &[]))));
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("Scoreboard is updating again"), "{t}");
+}
+
+#[test]
+fn challenges_tab_lists_opens_filters_and_takes_flags() {
+    use crate::board::model::{ChallengeInfo, Cmd, Download};
+    use crate::models::SubmitOutcome;
+    let mut app = demo_app(None);
+    // Opening the tab asks for the first challenge's details, once.
+    let first = app.board.challenge_list()[0].id;
+    assert_eq!(
+        app.on_key(key(KeyCode::Char('4'))),
+        Some(Cmd::Detail(first))
+    );
+    assert_eq!(app.view, View::Challenges);
+    let t = text(&draw(&mut app, 160, 44));
+    for needle in [
+        "Challenges, 20 of 30 solved",
+        "Crypto",
+        "4/5",
+        "✓",
+        "Caesar Salad",
+        "Loading",
+    ] {
+        assert!(t.contains(needle), "missing {needle:?}\n{t}");
+    }
+    app.apply(Update::Detail(
+        first,
+        Ok(Box::new(ChallengeInfo {
+            description: "Decode the salad.\nSecond line.".into(),
+            connection_info: Some("nc host 1".into()),
+            files: vec!["salad.txt".into()],
+            ..Default::default()
+        })),
+    ));
+    let buf = draw(&mut app, 160, 44);
+    export("challenges-160x44", &buf);
+    let t = text(&buf);
+    for needle in [
+        "Decode the salad.",
+        "Connect",
+        "nc host 1",
+        "Files",
+        "salad.txt",
+    ] {
+        assert!(t.contains(needle), "missing {needle:?}\n{t}");
+    }
+    // Moving on asks for the next one; coming back does not ask again.
+    let second = app.board.challenge_list()[1].id;
+    assert_eq!(app.on_key(key(KeyCode::Down)), Some(Cmd::Detail(second)));
+    assert_eq!(app.on_key(key(KeyCode::Up)), None);
+
+    // u keeps only what is left to solve.
+    app.on_key(key(KeyCode::Char('u')));
+    assert!(app.challenges().iter().all(|c| !c.solved_by_me));
+    assert!(text(&draw(&mut app, 160, 44)).contains("Challenges left to solve (10)"));
+    let open = app.challenge_id().unwrap();
+
+    // d downloads it; f types a flag, Enter sends it.
+    assert_eq!(
+        app.on_key(key(KeyCode::Char('d'))),
+        Some(Cmd::Download(Download::One(open)))
+    );
+    app.on_key(key(KeyCode::Char('f')));
+    for c in "flag{x}".chars() {
+        assert_eq!(app.on_key(key(KeyCode::Char(c))), None);
+    }
+    assert!(text(&draw(&mut app, 160, 44)).contains("Flag: flag{x}"));
+    assert_eq!(
+        app.on_key(key(KeyCode::Enter)),
+        Some(Cmd::Submit(open, "flag{x}".into()))
+    );
+    // Esc drops a flag without sending it.
+    app.on_key(key(KeyCode::Char('f')));
+    app.on_key(key(KeyCode::Char('q')));
+    assert_eq!(app.on_key(key(KeyCode::Esc)), None);
+    assert!(!app.quit && app.flag_input.is_none());
+
+    // A wrong flag is reported and changes nothing; a right one counts.
+    app.apply(Update::Submitted {
+        id: open,
+        outcome: SubmitOutcome::Rejected,
+        message: "Flag rejected (incorrect).".into(),
+    });
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(t.contains("Last flag") && t.contains("Flag rejected (incorrect)."));
+    let before = app.board.h2h.me.as_ref().unwrap().solves;
+    app.apply(Update::Submitted {
+        id: open,
+        outcome: SubmitOutcome::Accepted,
+        message: "Flag accepted! Challenge solved.".into(),
+    });
+    assert_eq!(
+        app.board.h2h.me.as_ref().unwrap().solves,
+        before.map(|n| n + 1)
+    );
+    assert!(
+        app.challenges().iter().all(|c| c.id != open),
+        "no longer left to solve"
+    );
+    assert!(text(&draw(&mut app, 160, 44)).contains("Flag accepted! Challenge solved."));
+}
+
+#[test]
+fn a_plan_target_opens_in_challenges() {
+    let mut app = demo_app(None);
+    app.on_key(key(KeyCode::Char('3')));
+    app.on_key(key(KeyCode::Down));
+    let target = app.board.plan.listed()[1].stat.id;
+    app.on_key(key(KeyCode::Char('o')));
+    assert_eq!(app.view, View::Challenges);
+    assert_eq!(app.challenge_id(), Some(target));
 }

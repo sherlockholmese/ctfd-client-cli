@@ -1,19 +1,36 @@
-//! `ctfdc lb --web`: the browser scoreboard server, against a mocked CTFd.
+//! `ctfdc web`: the browser scoreboard server, against a mocked CTFd.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// A running `ctfdc lb --web`, killed on drop.
+/// A running `ctfdc web`, killed on drop.
 struct WebBoard {
     child: Child,
+    /// Kept open: ctfdc keeps printing after the link, and a closed pipe
+    /// would stop it.
+    _stdout: BufReader<ChildStdout>,
     /// `http://127.0.0.1:PORT/`
     base: String,
     key: String,
+    /// The folder ctfdc runs in, where downloads land.
+    dir: std::path::PathBuf,
+}
+
+/// Read the first line ctfdc prints, handing the pipe back still open.
+async fn first_line(stdout: ChildStdout) -> (String, BufReader<ChildStdout>) {
+    tokio::task::spawn_blocking(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        (line, reader)
+    })
+    .await
+    .unwrap()
 }
 
 impl Drop for WebBoard {
@@ -25,24 +42,18 @@ impl Drop for WebBoard {
 
 impl WebBoard {
     async fn start(server: &MockServer, extra: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap().keep();
         let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin("ctfdc"));
         command
             .args(["--url", &server.uri(), "--token", "test-token"])
-            .args(["lb", "--web", "--no-open", "--port", "0"])
+            .args(["web", "--no-open", "--port", "0"])
             .args(extra)
-            .current_dir(tempfile::tempdir().unwrap().keep())
+            .current_dir(&dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = command.spawn().expect("ctfdc should start");
-        let stdout = child.stdout.take().unwrap();
-        let line = tokio::task::spawn_blocking(move || {
-            let mut line = String::new();
-            BufReader::new(stdout).read_line(&mut line).unwrap();
-            line
-        })
-        .await
-        .unwrap();
+        let (line, stdout) = first_line(child.stdout.take().unwrap()).await;
         let url = line
             .split_whitespace()
             .find(|w| w.starts_with("http://"))
@@ -51,8 +62,10 @@ impl WebBoard {
         let (base, key) = url.split_once("#k=").expect("URL carries the key");
         Self {
             child,
+            _stdout: stdout,
             base: base.to_string(),
             key: key.to_string(),
+            dir,
         }
     }
 
@@ -247,6 +260,19 @@ async fn page_actions_change_the_rival_and_pins() {
     let state = board.state().await;
     assert_eq!(state["standings"][2]["pinned"], true);
 
+    // The Plan goal: any ranked account can be asked for, and it only
+    // takes while that account is ahead of you.
+    assert_eq!(board.post("goal", json!({"key": "id:99"})).await, 404);
+    assert_eq!(board.post("goal", json!({"key": "id:1"})).await, 204);
+    assert_eq!(board.post("goal", json!({"key": null})).await, 204);
+    // The Plan's order.
+    assert_eq!(board.post("sort", json!({"by": "nonsense"})).await, 422);
+    assert_eq!(board.post("sort", json!({"by": "per_hour"})).await, 204);
+    let state = board.state().await;
+    assert_eq!(state["plan"]["sort"], "per_hour");
+    assert!(state["plan"]["ladder"].is_array());
+    assert!(state["notices"].is_array());
+
     assert_eq!(board.post("refresh", json!({})).await, 202);
 }
 
@@ -280,22 +306,183 @@ async fn since_reranks_the_web_board() {
     assert_eq!(state["host"].as_str().unwrap(), &server.uri()[7..]);
 }
 
+/// Wait for a notice of `kind` and return it.
+async fn notice(board: &WebBoard, kind: &str) -> Value {
+    for _ in 0..100 {
+        let state = board.state().await;
+        let found = state["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["kind"] == kind)
+            .cloned();
+        if let Some(found) = found {
+            return found;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("no {kind} notice");
+}
+
+#[tokio::test]
+async fn the_page_downloads_challenges_into_the_workspace() {
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 3).await;
+    let ok = |data: Value| {
+        ResponseTemplate::new(200).set_body_json(json!({"success": true, "data": data}))
+    };
+    for (id, name, category, files) in [
+        (1, "Warmup", "Misc", json!(["/files/aa/hint.txt"])),
+        (2, "Baby Pwn", "Pwn", json!([])),
+        (3, "Login", "Web", json!([])),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v1/challenges/{id}")))
+            .respond_with(ok(json!({
+                "id": id, "name": name, "category": category, "value": 100,
+                "description": "Find the flag.", "files": files
+            })))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/files/aa/hint.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("look closer"))
+        .mount(&server)
+        .await;
+    let board = WebBoard::start(&server, &[]).await;
+
+    // One challenge.
+    assert_eq!(board.post("download", json!({"id": 99})).await, 404);
+    assert_eq!(board.post("download", json!({"id": 2})).await, 202);
+    let done = notice(&board, "downloaded").await;
+    assert_eq!(done["title"], "Downloaded Baby Pwn");
+    assert!(board.dir.join("Pwn/Baby Pwn/README.md").is_file());
+    assert!(!board.dir.join("Misc").exists(), "only the one asked for");
+
+    // Everything, attachments included; the token stays out of the notice.
+    assert_eq!(board.post("download", json!({"id": null})).await, 202);
+    for _ in 0..100 {
+        if board.dir.join("Misc/Warmup/hint.txt").is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(board.dir.join("Misc/Warmup/hint.txt")).unwrap(),
+        "look closer"
+    );
+    assert!(board.dir.join("Web/Login/README.md").is_file());
+    let state = board.state().await.to_string();
+    assert!(state.contains("Downloaded 3 challenges"), "{state}");
+    assert!(!state.contains("test-token"));
+}
+
+#[tokio::test]
+async fn the_page_reads_challenges_and_submits_flags() {
+    use wiremock::matchers::body_partial_json;
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 3).await;
+    let ok = |data: Value| {
+        ResponseTemplate::new(200).set_body_json(json!({"success": true, "data": data}))
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/v1/challenges/2"))
+        .respond_with(ok(json!({
+            "id": 2, "name": "Baby Pwn", "category": "Pwn", "value": 100,
+            "description": "Smash the <b>stack</b>.", "connection_info": "nc pwn.example 9001",
+            "files": ["/files/aa/baby.tar.gz?token=secret-signature"], "tags": ["easy"]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .and(body_partial_json(
+            json!({"challenge_id": 2, "submission": "flag{right}"}),
+        ))
+        .respond_with(ok(json!({"status": "correct", "message": "Correct"})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/challenges/attempt"))
+        .respond_with(ok(json!({"status": "incorrect", "message": "Incorrect"})))
+        .mount(&server)
+        .await;
+    let board = WebBoard::start(&server, &[]).await;
+
+    // The list, in the tab's order, with what is solved.
+    let state = board.state().await;
+    let names: Vec<&str> = state["challenges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Warmup", "Baby Pwn", "Login"]);
+    assert_eq!(state["challenges"][2]["solved"], true);
+    assert_eq!(state["challenges"][1]["on_disk"], false);
+
+    // Details come on request; file URLs are reduced to names.
+    assert_eq!(board.post("detail", json!({"id": 99})).await, 404);
+    assert_eq!(board.post("detail", json!({"id": 2})).await, 202);
+    let mut detail = Value::Null;
+    for _ in 0..100 {
+        detail = board.state().await["details"]["2"].clone();
+        if !detail.is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(detail["description"], "Smash the <b>stack</b>.");
+    assert_eq!(detail["connection_info"], "nc pwn.example 9001");
+    assert_eq!(detail["files"], json!(["baby.tar.gz"]));
+    assert!(!board.state().await.to_string().contains("secret-signature"));
+
+    // A wrong flag, then the right one.
+    assert_eq!(
+        board.post("submit", json!({"id": 2, "flag": "  "})).await,
+        422
+    );
+    assert_eq!(
+        board.post("submit", json!({"id": 99, "flag": "x"})).await,
+        404
+    );
+    assert_eq!(
+        board
+            .post("submit", json!({"id": 2, "flag": "flag{wrong}"}))
+            .await,
+        202
+    );
+    let no = notice(&board, "flag_rejected").await;
+    assert_eq!(no["title"], "Baby Pwn");
+    let state = board.state().await;
+    assert_eq!(state["attempt"]["solved"], false);
+    assert_eq!(state["challenges"][1]["solved"], false);
+
+    assert_eq!(
+        board
+            .post("submit", json!({"id": 2, "flag": " flag{right} "}))
+            .await,
+        202
+    );
+    notice(&board, "flag_accepted").await;
+    let state = board.state().await;
+    assert_eq!(state["attempt"]["id"], 2);
+    assert_eq!(state["attempt"]["solved"], true);
+    assert_eq!(state["challenges"][1]["solved"], true);
+    assert!(!state.to_string().contains("test-token"));
+}
+
 #[test]
-fn web_options_need_web() {
+fn web_has_its_own_help_and_no_text_mode() {
     Command::cargo_bin("ctfdc")
         .unwrap()
-        .args([
-            "--url",
-            "http://localhost:9",
-            "--token",
-            "t",
-            "lb",
-            "--port",
-            "8080",
-        ])
+        .args(["web", "--help"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("--web"));
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("--port"))
+        .stdout(predicate::str::contains("--no-open"));
     Command::cargo_bin("ctfdc")
         .unwrap()
         .args([
@@ -303,13 +490,42 @@ fn web_options_need_web() {
             "http://localhost:9",
             "--token",
             "t",
-            "lb",
-            "--web",
+            "web",
             "--plain",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot be used with"));
+        .failure();
+    // The printed scoreboard is its own command: no web options at all.
+    Command::cargo_bin("ctfdc")
+        .unwrap()
+        .args(["lb", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ctfdc web"))
+        .stdout(predicate::str::contains("--port").not());
+    for flags in [&["--web"][..], &["--port", "8080"], &["--no-open"]] {
+        Command::cargo_bin("ctfdc")
+            .unwrap()
+            .args(["--url", "http://localhost:9", "--token", "t", "lb"])
+            .args(flags)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"));
+    }
+}
+
+#[tokio::test]
+async fn piped_output_without_flags_is_text() {
+    let server = MockServer::start().await;
+    mock_ctfd(&server, 2).await;
+    Command::cargo_bin("ctfdc")
+        .unwrap()
+        .args(["--url", &server.uri(), "--token", "t", "lb"])
+        .current_dir(tempfile::tempdir().unwrap().keep())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Score"))
+        .stdout(predicate::str::contains("Live scoreboard").not());
 }
 
 #[tokio::test]
