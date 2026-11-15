@@ -30,6 +30,7 @@
     layout: "split", // board layout: split, graph, table
     seenNotice: 0, // highest notice id already shown
     target: null, // id of the Plan target whose details are shown
+    more: false, // whether the target's full details are open
     challenge: null, // id of the challenge open on the Challenges tab
     unsolvedOnly: false,
     asked: new Set(), // challenge ids whose details were requested
@@ -279,8 +280,8 @@
       // Like the terminal view: when the data is from, and when it next updates.
       const next = Math.ceil(s.updated_at + s.interval - serverNow());
       text = s.refreshing || next <= 0
-        ? `Updated ${clock(s.updated_at)}, updating…`
-        : `Updated ${clock(s.updated_at)}, next in ${next}s`;
+        ? "Updating…"
+        : `Updated ${clock(s.updated_at)}`;
     }
     status.dataset.state = mode;
     status.textContent = text;
@@ -1082,7 +1083,7 @@
   };
   const left = (fraction) => `left:${(Math.min(1, Math.max(0, fraction)) * 100).toFixed(2)}%`;
 
-  // The same arrangement as the terminal: one timeline, then four blocks
+  // The same arrangement as the terminal: four blocks
   // of a heading over three lines.
   function drawStats(t) {
     const s = state.snap;
@@ -1090,20 +1091,7 @@
     const block = (label, ...rows) => el("div", { class: "viz-block" }, el("p", { class: "viz-label", text: label }), ...rows);
     const words = (text, strong) => el("p", { class: strong ? "viz-line" : "viz-line muted", text });
 
-    // When the tracked teams solved it, from the start of the CTF to now.
-    const line = el("div", { class: "timeline" });
-    line.append(el("div", { class: "timeline-recent", style: `width:${(Math.min(1, 3600 / st.elapsed) * 100).toFixed(2)}%`, title: "The last hour" }));
-    for (const [at, who, text] of st.solves) line.append(el("div", { class: "timeline-dot", style: left(at / st.elapsed), title: `${who}, ${text} in` }));
     const count = st.solves.length;
-    const summary = count ? [`${count} ${count === 1 ? "solve" : "solves"}`, `first ${st.solves[0][2]} in`, `latest ${st.latest_text} ago`] : ["No tracked team has solved it"];
-    const timeline = el(
-      "div",
-      { class: "viz-timeline" },
-      el("span", { class: "muted", text: "Start" }),
-      line,
-      el("span", { class: "muted", text: "Now" }),
-      el("span", { class: "viz-summary" }, ...summary.map((part) => el("span", { text: part }))),
-    );
 
     // How widely it is solved.
     const meter = (label, n, of) =>
@@ -1143,27 +1131,43 @@
       box.append(el("div", { class: `spans-you${t.time_guessed ? " guess" : ""}`, style: left(st.time / top), title: t.time_guessed ? "Your time, guessed from its difficulty" : "Your time, at your pace" }));
       time.push(box);
       time.push(
-        el("p", { class: "viz-line" }, el("span", { class: "muted", text: `${st.typical_text ? `typically ${st.typical_text}` : "no solve times yet"}, ` }), `you ${t.time_guessed ? "~" : ""}${t.time}`),
+        el("p", { class: "viz-line" }, st.typical_text ? el("span", { class: "muted", text: `${st.typical_text}, ` }) : null, `you ${t.time_guessed ? "~" : ""}${t.time}`),
       );
     } else {
-      time.push(words("No solve times yet"));
+      time.push(words("—"));
     }
 
-    // Who solved it how far in: the names the timeline cannot carry.
+    // Who solved it, and how far into the CTF.
     const SHOWN = 3;
     const named = count > SHOWN ? SHOWN - 1 : count;
     const who = st.solves.slice(0, named).map(([, name, text]) => el("div", { class: "meter meter-who" }, el("span", { text: name, title: name }), el("span", { class: "muted tabular", text })));
-    if (count > named) who.push(words(`and ${count - named} more`));
-    if (!count) who.push(words("Nobody tracked yet"));
+    if (count > named) who.push(words(`+${count - named}`));
+    if (!count) who.push(words("—"));
 
     return [
-      timeline,
       block("Solved by", ...reach),
-      block("Your odds", odds, words(`likely ${pct(st.odds_low)} to ${pct(st.odds_high)}`), words(`${t.category || "Category"}: you ${st.category[0]}/${st.category[1]}, field ${pct(st.category_share)}`)),
+      block("Your odds", odds, words(`${pct(st.odds_low)} to ${pct(st.odds_high)}`)),
       block("Time taken", ...time),
       block("Solved at", ...who),
     ];
   }
+
+  // The full details stay closed until asked for, and stay as left.
+  function setMore(open) {
+    state.more = open;
+    try {
+      localStorage.setItem("ctfdc-more", open ? "1" : "");
+    } catch {
+      /* private mode: the choice lasts for this page only */
+    }
+    if (state.snap) renderPlan();
+  }
+  try {
+    state.more = localStorage.getItem("ctfdc-more") === "1";
+  } catch {
+    /* stays closed */
+  }
+  $("more").addEventListener("click", () => setMore(!state.more));
 
   function pickTarget(id) {
     state.target = id;
@@ -1213,16 +1217,22 @@
     const cells = (r) => {
       const gap = -r.ahead;
       const m = r.momentum;
+      // What it takes, in the row's tooltip: the route's gain, work and
+      // odds, and the team's recent pace.
+      const more = [
+        r.points ? `+${num(r.points)} points` : null,
+        r.time ? `about ${r.time} of work` : null,
+        r.ahead >= 0 && r.odds !== null ? `${pct(r.odds)} chance of landing it` : null,
+        m ? `${signed(m.last_3h) || "0"} in their last 3 hours` : null,
+      ].filter(Boolean);
       return [
         el("span", { class: `num ${gap > 0 ? "delta-up" : gap < 0 ? "delta-down" : "muted"}`, text: signed(gap) || "0" }),
-        el("span", { class: "num muted", text: r.pace === null ? "" : num(Math.round(r.pace)), title: m ? `${signed(m.last_hour) || "0"} in the last hour, ${signed(m.last_3h) || "0"} in the last 3` : null }),
-        el("span", { class: "num", title: [r.points ? `+${num(r.points)}` : "", r.time ? `about ${r.time} of work` : ""].filter(Boolean).join(", ") || null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
-        el("span", { class: "num muted", text: r.ahead < 0 || r.odds === null ? "" : pct(r.odds) }),
+        el("span", { class: "num", title: more.join(", ") || null, text: r.ahead < 0 ? "" : r.solves ? solvesText(r.solves) : "—" }),
       ];
     };
     const name = (text, badge) => el("span", { class: "rung-name" }, el("span", { text, title: text }), badge ? el("span", { class: "badge badge-solid badge-sm", text: badge }) : null);
     const youRow = () =>
-      el("div", { class: "rung is-me", role: "presentation" }, el("span"), el("span", { class: "num rung-pos", text: me.pos }), name(me.name, "You"), el("span"), el("span", { class: "num", text: plan.my_pace === null ? "" : num(Math.round(plan.my_pace)) }), el("span"), el("span"));
+      el("div", { class: "rung is-me", role: "presentation" }, el("span"), el("span", { class: "num rung-pos", text: me.pos }), name(me.name, "You"), el("span"), el("span"));
     const rows = [];
     let placed = false;
     for (const r of plan.ladder) {
@@ -1265,7 +1275,6 @@
 
     const goal = goalRung();
     renderLadder(goal);
-    $("pace-note").textContent = plan.pace_note;
 
     // The answer: who you aim for, what it takes, how likely it is.
     const byId = new Map(plan.targets.map((t) => [t.id, t]));
@@ -1281,7 +1290,7 @@
       headline = `Not enough open points to ${aim}`;
     } else {
       headline = `${solvesText(route.length)} to ${aim}`;
-      sub = [el("b", { text: `+${num(goal.points)}` }), " points, ", el("b", { text: pct(goal.odds) }), ` chance of landing ${route.length === 1 ? "it" : "all"}`];
+      sub = [el("b", { text: `+${num(goal.points)}` }), " pts", el("b", { class: "gap", text: pct(goal.odds) }), " odds"];
     }
     $("plan-headline").textContent = headline;
     replace($("plan-sub"), sub);
@@ -1311,7 +1320,6 @@
           ),
         ),
         el("td", { class: "hide-sm col-cat cat", text: t.category }),
-        el("td", { class: "col-diff diff", "data-tagged": String(t.difficulty_tagged), text: t.difficulty_label, title: t.difficulty_tagged ? "Tagged by the organisers" : "Estimated from solves and points" }),
         el("td", { class: "num", text: num(t.value) }),
         el(
           "td",
@@ -1319,22 +1327,23 @@
           el("span", { class: "pop", title: field }, el("span", { text: pct(t.odds) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round(t.odds * 100)}%` }))),
         ),
         el("td", { class: `num col-time${t.time_guessed ? " guess" : ""}`, text: t.time ? (t.time_guessed ? `~${t.time}` : t.time) : "—", title: t.time ? (t.time_guessed ? "Guessed from its difficulty: no tracked team has solved it" : "What it took the teams that solved it, at your pace") : null }),
-        el("td", { class: "num col-rate", text: t.per_hour === null ? "—" : num(Math.round(t.per_hour)) }),
-        el("td", { class: "hide-sm col-why why", text: t.why ?? "", title: REASON_TITLES[t.reason] ?? null }),
       );
     };
     const targets = route.map((t, i) => targetRow(t, i + 1));
     if (route.length) {
-      const label = qualifying ? `Reaches top ${s.cutoff}, past ${goal.name}` : `Passes ${goal.name} for #${goal.pos}`;
-      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 8 }, el("span", { text: label }))));
+      const label = qualifying ? `Top ${s.cutoff}` : `Passes #${goal.pos}`;
+      targets.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 5 }, el("span", { text: label }))));
     }
     for (const t of plan.targets) if (!onRoute.has(t.id)) targets.push(targetRow(t, 0));
     const refocus = $("targets-body").contains(document.activeElement);
     replace($("targets-body"), targets);
     if (refocus) $("targets-body").querySelector('.pick[aria-pressed="true"]')?.focus();
+    // An order with no column of its own is named in the first heading.
+    const unlisted = { per_hour: "Best targets, per hour" }[plan.sort];
+    document.querySelector('#view-plan .sort[data-sort="likely"]').textContent = unlisted ?? "Best targets";
     for (const th of document.querySelectorAll("#view-plan th:has(.sort)")) {
       const key = th.querySelector(".sort").dataset.sort;
-      if (key === plan.sort) th.setAttribute("aria-sort", key === "time" ? "ascending" : "descending");
+      if (key === plan.sort || (unlisted && key === "likely")) th.setAttribute("aria-sort", key === "time" ? "ascending" : "descending");
       else th.removeAttribute("aria-sort");
     }
 
@@ -1347,9 +1356,14 @@
       level.title = picked.difficulty_tagged ? "Tagged by the organisers" : "Estimated from solves and points";
       replace(level, [
         el("span", { class: "pips", "aria-hidden": "true" }, ...[0, 1, 2, 3].map((i) => el("i", { class: i <= picked.stats.level ? "on" : null }))),
-        el("span", { text: picked.difficulty_tagged ? picked.difficulty_label : `${picked.difficulty_label}, estimated` }),
+        el("span", { text: picked.difficulty_label }),
       ]);
-      replace($("viz"), drawStats(picked));
+      $("signals-why").textContent = picked.why ?? "";
+      $("signals-why").title = REASON_TITLES[picked.reason] ?? "";
+      replace($("viz-more"), drawStats(picked));
+      $("viz-more").hidden = !state.more;
+      $("more").setAttribute("aria-expanded", state.more);
+      $("more").textContent = state.more ? "Less" : "More";
       replace($("facts"), picked.facts.map((f) => el("div", null, el("dt", { text: f.label }), el("dd", { text: f.value }))));
     }
     $("targets-empty").hidden = targets.length > 0;
@@ -1362,10 +1376,8 @@
         el(
           "tr",
           null,
-          el("td", { class: "col-name" }, el("span", { class: "chal-name", text: f.category || "Uncategorized" })),
-          el("td", { class: "num muted", text: `${f.mine}/${f.total}` }),
+          el("td", { class: "col-name", title: `${f.mine} of ${f.total} solved, ${num(f.points)} points open` }, el("span", { class: "chal-name", text: f.category || "Uncategorized" })),
           el("td", { class: "num", text: num(f.open) }),
-          el("td", { class: "num hide-sm", text: num(f.points) }),
           el("td", { class: "num" }, el("span", { class: "likely" }, el("span", { text: num(Math.round(f.expected)) }), el("span", { class: "pop-bar", "aria-hidden": "true" }, el("i", { style: `width:${Math.round((f.expected / most) * 100)}%` })))),
         ),
       ),
@@ -1434,17 +1446,6 @@
         : `${num(Math.abs(c.points))} short of top ${s.cutoff}`;
       gap.push(el("p", { class: "versus-line", text }));
     }
-    // What it takes to pass them, as the terminal's second line says it.
-    if (h.rival && !h.rival_loading && h.me.score < h.rival.score && h.catch_up.length) {
-      const n = h.closes_gap_at === null ? 0 : h.closes_gap_at + 1;
-      const sum = h.catch_up.slice(0, n || h.catch_up.length).reduce((a, c) => a + c.value, 0);
-      gap.push(
-        el("p", {
-          class: "versus-line",
-          text: n ? `Top ${n} catch-up ${n === 1 ? "target passes" : "targets pass"} them, +${num(sum)}` : `Catch-up targets are worth +${num(sum)}, not enough to pass`,
-        }),
-      );
-    }
     replace($("h2h-gap"), gap);
 
     // Catch-up targets.
@@ -1462,7 +1463,7 @@
         catchBody.push(el("tr", null, ...challengeCells(c), popularity(c), whenCell(c), el("td", { class: "num hide-sm col-extra muted", text: num(running) })));
         if (i === h.closes_gap_at && i < h.catch_up.length - 1) {
           const gapPts = h.rival.score - h.me.score;
-          catchBody.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 6 }, el("span", { text: `Passes ${h.rival.name}`, title: `Solving down to here closes the ${num(gapPts)} point gap` }))));
+          catchBody.push(el("tr", { class: "closes", "aria-hidden": "true" }, el("td", { colspan: 6 }, el("span", { text: `Passes #${h.rival.pos}`, title: `Solving down to here closes the ${num(gapPts)} point gap` }))));
         }
       });
     }
@@ -1547,7 +1548,8 @@
     const picked = list.find((c) => c.id === state.challenge) ?? list[0] ?? null;
     state.challenge = picked ? picked.id : null;
     const solved = s.challenges.filter((c) => c.solved).length;
-    $("chal-count").textContent = `${solved} of ${s.challenges.length} solved`;
+    $("chal-count").textContent = `${solved}/${s.challenges.length}`;
+    $("chal-count").title = `${solved} of ${s.challenges.length} solved`;
     $("chal-unsolved").setAttribute("aria-pressed", state.unsolvedOnly);
 
     // One mark per row: solved, or downloaded to the workspace.
@@ -1619,9 +1621,12 @@
       api("detail", { id: picked.id }).catch(() => state.asked.delete(picked.id));
     }
     $("chal-name").textContent = picked.name;
-    $("chal-meta").textContent = [picked.category, `${num(picked.value)} points`, picked.solves === null ? null : `${num(picked.solves)} ${picked.solves === 1 ? "solve" : "solves"}`, picked.solved ? "solved" : picked.on_disk ? "on disk" : null]
-      .filter(Boolean)
-      .join(", ");
+    replace(
+      $("chal-meta"),
+      [picked.category, `${num(picked.value)} pts`, picked.solves === null ? null : `${num(picked.solves)} ${picked.solves === 1 ? "solve" : "solves"}`, picked.solved ? "Solved" : picked.on_disk ? "On disk" : null]
+        .filter(Boolean)
+        .map((part) => el("span", { text: part })),
+    );
     const fact = (label, node) => [el("dt", { text: label }), el("dd", null, node)];
     const facts = [];
     if (info) {
@@ -1811,6 +1816,7 @@
     else if (state.view === "plan" && (e.key === "ArrowDown" || e.key === "j")) stepTarget(1);
     else if (state.view === "plan" && (e.key === "ArrowUp" || e.key === "k")) stepTarget(-1);
     else if (state.view === "plan" && e.key === "s") cycleSort();
+    else if (state.view === "plan" && e.key === "i") setMore(!state.more);
     else if (state.view === "challenges" && (e.key === "ArrowDown" || e.key === "j")) stepChallenge(1);
     else if (state.view === "challenges" && (e.key === "ArrowUp" || e.key === "k")) stepChallenge(-1);
     else if (state.view === "challenges" && e.key === "u") $("chal-unsolved").click();

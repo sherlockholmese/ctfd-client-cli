@@ -620,18 +620,13 @@ tr.closes td span {
 /* Ladder: one row per team, the ones ahead of you pickable as the goal. */
 .ladder { display: grid; }
 .rung {
-  display: grid; grid-template-columns: 16px 24px minmax(0, 1fr) 52px 40px 60px 36px;
+  display: grid; grid-template-columns: 16px 24px minmax(0, 1fr) 64px 72px;
   align-items: center; gap: 8px; width: 100%; min-height: var(--row);
   padding: 0 var(--inset); border: 0; background: transparent; text-align: left;
   font-size: 13.5px; border-top: 1px solid var(--border);
 }
 .rung .num { text-align: right; }
 .rung-head { min-height: 28px; border-top: 0; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
-.rail-note {
-  padding: 8px var(--inset) 0; border-top: 1px solid var(--border);
-  font-size: 13px; color: var(--muted-foreground);
-}
-.rail-note:empty { display: none; }
 .rung-pos { color: var(--muted-foreground); }
 .rung-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 8px; align-items: center; min-width: 0; }
 .rung-name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
@@ -664,6 +659,8 @@ button.rung[aria-checked="true"] .radio::after {
 .plan-headline { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
 .plan-sub { font-size: 14px; color: var(--muted-foreground); white-space: nowrap; }
 .plan-sub b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+.plan-sub b.gap { margin-left: 20px; }
+.chal-head .plan-sub { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 /* Difficulty read off solves and points is a guess: said more quietly
    than an organiser's tag. */
 .diff[data-tagged="false"] { color: var(--muted-foreground); }
@@ -691,13 +688,17 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
 
 /* Details of the picked target: every signal, labelled. */
 .signals {
-  flex: none; border-top: 1px solid var(--border); padding: 12px var(--inset) 16px;
+  flex: none; border-top: 1px solid var(--border); padding: 10px var(--inset);
   display: grid; gap: 8px;
 }
-.signals-head { gap: 16px; }
+.signals:has(.viz-more:not([hidden])) { padding-bottom: 16px; }
+.signals-head { gap: 12px; }
+.signals-head .level { margin-left: 4px; }
+.viz-more { padding-top: 4px; }
+.viz-more[hidden] { display: none; }
 .signals-head .card-title { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .btn[aria-busy="true"] { opacity: 0.6; cursor: progress; }
-/* One timeline, then four blocks of a heading over three lines: the
+/* Four blocks of a heading over up to three lines: the
    arrangement the terminal uses too. */
 .viz { display: grid; gap: 12px 32px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .viz-block { display: grid; gap: 4px; min-width: 0; align-content: start; grid-auto-rows: 20px; }
@@ -710,22 +711,6 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
 .pips i { width: 14px; height: 6px; border-radius: 2px; background: var(--muted); }
 .pips i.on { background: var(--foreground); }
 .level[data-tagged="false"] .pips i.on { background: var(--muted-foreground); }
-
-/* Solves over the CTF: a line from the start to now, a dot per solve, and
-   the last hour shaded; beside it, the count and the first and latest. */
-.viz-timeline {
-  grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(120px, 1fr) auto auto;
-  align-items: center; gap: 12px; font-size: 13px;
-}
-.viz-summary { display: flex; gap: 20px; white-space: nowrap; color: var(--muted-foreground); padding-left: 12px; }
-.viz-summary > span:first-child { color: var(--foreground); }
-.timeline { position: relative; height: 20px; }
-.timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 9px; border-top: 1px solid var(--muted-foreground); opacity: 0.5; }
-.timeline-recent { position: absolute; top: 2px; height: 16px; right: 0; border-radius: 4px; background: var(--muted); }
-.timeline-dot {
-  position: absolute; top: 5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%;
-  background: var(--foreground); box-shadow: 0 0 0 2px var(--card);
-}
 
 /* A label, a bar and its count on one line. */
 .meter { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
@@ -941,14 +926,6 @@ kbd {
 @container (max-width: 380px) {
   .col-cat { display: none; }
 }
-/* A narrow rail gives the last-hour column to the team names. */
-@container (max-width: 450px) {
-  .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px 36px; }
-  .rung > :nth-child(5) { display: none; }
-}
-@container (max-width: 460px) {
-  .col-diff, .col-rate { display: none; }
-}
 @container (max-width: 560px) {
   .col-when { display: none; }
 }
@@ -957,15 +934,11 @@ kbd {
 }
 @container (max-width: 700px) {
   .viz { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .viz-timeline { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .viz-summary { grid-column: 1 / -1; padding-left: 0; }
 }
 @container (max-width: 460px) {
   .viz { grid-template-columns: minmax(0, 1fr); }
-  .viz-summary { flex-wrap: wrap; gap: 4px 16px; }
 }
 @container (max-width: 780px) {
-  .col-why { display: none; }
   .plan-headline { font-size: 20px; }
 }
 /* A wide feed reads as one line per solve. */
@@ -1002,8 +975,6 @@ kbd {
   .chal-form { grid-template-columns: minmax(0, 1fr) auto; }
   .chal-form .label { grid-column: 1 / -1; }
   .chal-attempt { grid-column: 1 / -1; }
-  .rung { grid-template-columns: 16px 24px minmax(0, 1fr) 52px 60px; }
-  .rung > :nth-child(5), .rung > :nth-child(7) { display: none; }
   /* The rival picker on the Analysis tab covers this on narrow screens. */
   .btn-compare { display: none; }
 }
@@ -1012,7 +983,7 @@ kbd {
   *, *::before, *::after { transition-duration: 0ms !important; animation: none !important; }
 }
 @media (forced-colors: active) {
-  .swatch, .pop-bar > i, .bar > i, .pips i, .timeline-dot, .range-mark, .range-band, .spans-median { forced-color-adjust: none; }
+  .swatch, .pop-bar > i, .bar > i, .pips i, .range-mark, .range-band, .spans-median { forced-color-adjust: none; }
   tr.on-route td:first-child { box-shadow: none; border-left: 2px solid CanvasText; }
   button.rung[aria-checked="true"] .radio::after { background: CanvasText; }
 }

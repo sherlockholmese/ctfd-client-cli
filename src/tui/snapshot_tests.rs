@@ -319,26 +319,17 @@ fn plan_ranks_targets_and_the_climb() {
     let t = text(&buf);
     for needle in [
         "2 solves to pass #5",
-        "chance of landing all",
-        "Level",
-        "Pace",
-        "Time",
-        "You solve about every",
-        // The highlighted target's details, solve times included.
-        "●",
-        "solves   first",
-        "Solved by",
-        "Your odds",
-        "likely 2",
-        "Time taken",
-        "typically",
-        "▲",
-        "Solved at",
+        "5% odds",
         "Best targets",
         "↑ passes",
         "Aim for",
+        "To pass",
         "Where to focus",
-        "Quick win",
+        "Likely",
+        "Time",
+        // The highlighted target: its name, level and reason.
+        "Medium",
+        "Rival has it",
     ] {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
     }
@@ -366,11 +357,31 @@ fn plan_ranks_targets_and_the_climb() {
             .all(|w| w[0].per_hour.unwrap_or(0.0) >= w[1].per_hour.unwrap_or(0.0)),
         "best points per hour first"
     );
-    assert!(text(&draw(&mut app, 160, 44)).contains("/h↓"));
+    assert!(text(&draw(&mut app, 160, 44)).contains("Challenge, by points per hour"));
     for _ in 0..4 {
         app.on_key(key(KeyCode::Char('s')));
     }
     assert_eq!(app.board.plan.sort, Sort::Likely);
+    // The rest of what is known stays out of the way until `i` asks.
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(!t.contains("Solved by") && !t.contains("Your odds"), "{t}");
+    app.on_key(key(KeyCode::Char('i')));
+    let buf = draw(&mut app, 160, 44);
+    export("plan-more-160x44", &buf);
+    let t = text(&buf);
+    for needle in [
+        "Solved by",
+        "Your odds",
+        "23% to 41%",
+        "Time taken",
+        "▲",
+        "Solved at",
+    ] {
+        assert!(t.contains(needle), "missing {needle:?}\n{t}");
+    }
+    app.on_key(key(KeyCode::Char('i')));
+    assert!(!text(&draw(&mut app, 160, 44)).contains("Solved by"));
+
     let plan = &app.board.plan;
 
     // The route leads the list, and <- moves the goal up the board.
@@ -384,6 +395,10 @@ fn plan_ranks_targets_and_the_climb() {
     assert_eq!(app.board.plan.goal, Some(1));
     let t = text(&draw(&mut app, 160, 44));
     assert!(t.contains("to pass #1 Heap Hoppers"), "{t}");
+    // Figures, not sentences: no timeline, no summaries.
+    for gone in ["●", "chance of landing", "You solve about", "tracked"] {
+        assert!(!t.contains(gone), "{gone:?} is back\n{t}");
+    }
     export("plan-goal-160x44", &draw(&mut app, 160, 44));
     app.on_key(key(KeyCode::Char('m')));
     assert_eq!(app.board.plan.goal, Some(5));
