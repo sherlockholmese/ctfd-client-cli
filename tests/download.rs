@@ -1,18 +1,15 @@
-use assert_cmd::Command;
+//! Challenge downloads, metadata, attachments, and safe paths.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use std::path::PathBuf;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
-
-// ============================================================================
 // Helper: set up a mock server with challenge list and detail responses
 // for a simple single-challenge download scenario.
-// ============================================================================
 
 fn single_challenge_list() -> serde_json::Value {
     serde_json::json!({
@@ -143,10 +140,6 @@ async fn mount_single_challenge_with_attachment(server: &MockServer) {
         .await;
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-001 — Requires API Token Authentication
-// ============================================================================
-
 #[test]
 fn missing_token_fails_before_request() {
     ctfd()
@@ -159,10 +152,6 @@ fn missing_token_fails_before_request() {
         .stderr(predicate::str::contains("token").or(predicate::str::contains("Token")));
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-021 — Requires configured CTFd URL
-// ============================================================================
-
 #[test]
 fn missing_url_fails_before_request() {
     ctfd()
@@ -174,11 +163,6 @@ fn missing_url_fails_before_request() {
         .failure()
         .stderr(predicate::str::contains("URL"));
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-002 — Uses Configured CTFd URL
-// VAL-DOWNLOAD-003 — Fetches Challenge List
-// ============================================================================
 
 #[tokio::test]
 async fn sends_requests_to_configured_url() {
@@ -204,10 +188,6 @@ async fn sends_requests_to_configured_url() {
         .success()
         .stdout(predicate::str::contains("No challenges"));
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-022 — Handles empty challenge list
-// ============================================================================
 
 #[tokio::test]
 async fn empty_challenge_list_prints_message_and_creates_nothing() {
@@ -246,10 +226,6 @@ async fn empty_challenge_list_prints_message_and_creates_nothing() {
     );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-005 — Writes Under Current Directory
-// ============================================================================
-
 #[tokio::test]
 async fn writes_under_current_directory() {
     let server = MockServer::start().await;
@@ -281,11 +257,6 @@ async fn writes_under_current_directory() {
     );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-006 — Creates Category And Challenge Directory
-// VAL-DOWNLOAD-027 — Safe names preserved exactly
-// ============================================================================
-
 #[tokio::test]
 async fn creates_category_challenge_directory() {
     let server = MockServer::start().await;
@@ -308,11 +279,6 @@ async fn creates_category_challenge_directory() {
         "category/challenge-name directory should exist"
     );
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-007 — Writes README.md
-// VAL-DOWNLOAD-024 — Writes exact core filenames
-// ============================================================================
 
 #[tokio::test]
 async fn writes_readme() {
@@ -360,10 +326,6 @@ async fn writes_readme() {
     );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-008 — Writes Metadata JSON
-// ============================================================================
-
 #[tokio::test]
 async fn writes_metadata_json() {
     let server = MockServer::start().await;
@@ -406,10 +368,6 @@ async fn writes_metadata_json() {
     assert!(!meta["description"].as_str().unwrap().is_empty());
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-009 — Downloads Attachments
-// ============================================================================
-
 #[tokio::test]
 async fn downloads_attachment_files() {
     let server = MockServer::start().await;
@@ -441,10 +399,6 @@ async fn downloads_attachment_files() {
         "Attachment bytes should match exactly"
     );
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-010 — Preserves Attachment Filenames Safely
-// ============================================================================
 
 #[tokio::test]
 async fn preserves_safe_attachment_filenames() {
@@ -559,10 +513,6 @@ async fn sanitizes_unsafe_attachment_filenames() {
     assert!(!outside.exists(), "Should not write outside challenge dir");
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-023 — Downloads all visible challenges
-// ============================================================================
-
 #[tokio::test]
 async fn downloads_all_visible_challenges() {
     let server = MockServer::start().await;
@@ -618,10 +568,6 @@ async fn downloads_all_visible_challenges() {
     assert!(stdout.contains("3"), "Should mention 3 downloads");
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-004 — Fetches Challenge Details
-// ============================================================================
-
 #[tokio::test]
 async fn fetches_challenge_details_for_each_challenge() {
     let server = MockServer::start().await;
@@ -652,10 +598,6 @@ async fn fetches_challenge_details_for_each_challenge() {
         .assert()
         .success();
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-011 — Sanitizes Category And Challenge Names
-// ============================================================================
 
 #[tokio::test]
 async fn sanitizes_unsafe_category_and_challenge_names() {
@@ -713,10 +655,6 @@ async fn sanitizes_unsafe_category_and_challenge_names() {
     );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-012 — Prevents Path Traversal Writes
-// ============================================================================
-
 #[tokio::test]
 async fn prevents_path_traversal_writes() {
     let server = MockServer::start().await;
@@ -767,10 +705,6 @@ async fn prevents_path_traversal_writes() {
         "Sentinel outside temp dir should not be written"
     );
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-028 — Unsafe names become deterministic
-// ============================================================================
 
 #[tokio::test]
 async fn unsafe_names_are_deterministic() {
@@ -825,10 +759,6 @@ async fn unsafe_names_are_deterministic() {
     assert!(t2.path().join(expected_dir).is_dir());
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-013 — Handles Existing Directories
-// ============================================================================
-
 #[tokio::test]
 async fn handles_existing_directory() {
     let server = MockServer::start().await;
@@ -860,10 +790,6 @@ async fn handles_existing_directory() {
     let notes = std::fs::read_to_string(chal_dir.join("my-notes.txt")).unwrap();
     assert_eq!(notes, "personal notes");
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-014 — Handles Existing Files Predictably (overwrites)
-// ============================================================================
 
 #[tokio::test]
 async fn overwrites_existing_generated_files() {
@@ -897,10 +823,6 @@ async fn overwrites_existing_generated_files() {
         "Old content should be replaced"
     );
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-015 — Reports Challenge List API Errors
-// ============================================================================
 
 #[tokio::test]
 async fn reports_challenge_list_api_error() {
@@ -981,10 +903,6 @@ async fn reports_malformed_challenge_list() {
         );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-016 — Reports Challenge Detail API Errors
-// ============================================================================
-
 #[tokio::test]
 async fn reports_challenge_detail_api_error() {
     let server = MockServer::start().await;
@@ -1017,10 +935,6 @@ async fn reports_challenge_detail_api_error() {
                 .and(predicate::str::contains("Baby Login").or(predicate::str::contains("detail"))),
         );
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-017 — Reports Attachment Download Errors
-// ============================================================================
 
 #[tokio::test]
 async fn reports_attachment_download_error() {
@@ -1058,10 +972,6 @@ async fn reports_attachment_download_error() {
         .stderr(predicate::str::contains("handout.zip").or(predicate::str::contains("attachment")));
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-018 — Reports Filesystem Creation Errors
-// ============================================================================
-
 #[tokio::test]
 async fn reports_filesystem_creation_error() {
     let server = MockServer::start().await;
@@ -1093,10 +1003,6 @@ async fn reports_filesystem_creation_error() {
         .failure()
         .stderr(predicate::str::contains("create").or(predicate::str::contains("directory")));
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-019 — Avoids Partial Metadata On Failure
-// ============================================================================
 
 #[tokio::test]
 async fn avoids_partial_metadata_on_detail_failure() {
@@ -1161,10 +1067,6 @@ async fn avoids_partial_metadata_on_detail_failure() {
     );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-020 — Emits Useful Success Output
-// ============================================================================
-
 #[tokio::test]
 async fn emits_useful_success_output() {
     let server = MockServer::start().await;
@@ -1192,10 +1094,6 @@ async fn emits_useful_success_output() {
         "Should mention success: '{stdout}'"
     );
 }
-
-// ============================================================================
-// VAL-DOWNLOAD-025 — Resolves relative and absolute attachment URLs
-// ============================================================================
 
 #[tokio::test]
 async fn resolves_relative_attachment_urls() {
@@ -1301,10 +1199,6 @@ async fn resolves_absolute_attachment_urls() {
     assert_eq!(std::fs::read(&file).unwrap(), b"absolute content");
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-026 — Handles sanitized filename collisions
-// ============================================================================
-
 #[tokio::test]
 async fn handles_filename_collision_with_disambiguation() {
     let server = MockServer::start().await;
@@ -1380,10 +1274,6 @@ async fn handles_filename_collision_with_disambiguation() {
     );
 }
 
-// ============================================================================
-// VAL-DOWNLOAD-024 — Writes exact core filenames
-// ============================================================================
-
 #[tokio::test]
 async fn writes_exact_core_filenames() {
     let server = MockServer::start().await;
@@ -1411,9 +1301,7 @@ async fn writes_exact_core_filenames() {
     );
 }
 
-// ============================================================================
 // Token secrecy checks
-// ============================================================================
 
 #[tokio::test]
 async fn token_not_leaked_on_success() {

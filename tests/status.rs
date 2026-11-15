@@ -1,12 +1,11 @@
-use assert_cmd::Command;
+//! Challenge listings, filters, and progress reporting.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
 
 /// Return a standard multi-category challenge fixture JSON.
 fn multi_category_challenges() -> serde_json::Value {
@@ -21,10 +20,6 @@ fn multi_category_challenges() -> serde_json::Value {
         ]
     })
 }
-
-// ============================================================================
-// VAL-STATUS-001 — Lists challenge categories
-// ============================================================================
 
 #[tokio::test]
 async fn lists_challenge_categories() {
@@ -48,10 +43,6 @@ async fn lists_challenge_categories() {
         .stdout(predicate::str::contains("Crypto"))
         .stdout(predicate::str::contains("Forensics"));
 }
-
-// ============================================================================
-// VAL-STATUS-002 — Lists challenge names
-// ============================================================================
 
 #[tokio::test]
 async fn lists_challenge_names() {
@@ -77,10 +68,6 @@ async fn lists_challenge_names() {
         .stdout(predicate::str::contains("AES Attack"))
         .stdout(predicate::str::contains("Forensics Intro"));
 }
-
-// ============================================================================
-// VAL-STATUS-003 — Shows solved challenge status
-// ============================================================================
 
 #[tokio::test]
 async fn shows_solved_challenge_status() {
@@ -109,10 +96,6 @@ async fn shows_solved_challenge_status() {
         .stdout(predicate::str::contains("[✓]"));
 }
 
-// ============================================================================
-// VAL-STATUS-004 — Shows unsolved challenge status
-// ============================================================================
-
 #[tokio::test]
 async fn shows_unsolved_challenge_status() {
     let server = MockServer::start().await;
@@ -139,10 +122,6 @@ async fn shows_unsolved_challenge_status() {
         .stdout(predicate::str::contains("Unsolved Challenge"))
         .stdout(predicate::str::contains("[ ]"));
 }
-
-// ============================================================================
-// VAL-STATUS-005 — Preserves category-to-challenge grouping
-// ============================================================================
 
 #[tokio::test]
 async fn challenges_grouped_by_category() {
@@ -205,10 +184,6 @@ async fn challenges_grouped_by_category() {
     );
 }
 
-// ============================================================================
-// VAL-STATUS-006 — Handles empty challenge list
-// ============================================================================
-
 #[tokio::test]
 async fn empty_challenge_list_shows_message() {
     let server = MockServer::start().await;
@@ -233,10 +208,6 @@ async fn empty_challenge_list_shows_message() {
         .stdout(predicate::str::contains("No challenges available"));
 }
 
-// ============================================================================
-// VAL-STATUS-007 — Requires configured CTFd URL
-// ============================================================================
-
 #[test]
 fn missing_url_fails_before_request() {
     ctfd()
@@ -249,10 +220,6 @@ fn missing_url_fails_before_request() {
         .stderr(predicate::str::contains("URL"));
 }
 
-// ============================================================================
-// VAL-STATUS-008 — Requires API-token authentication
-// ============================================================================
-
 #[test]
 fn missing_token_fails_before_request() {
     ctfd()
@@ -264,10 +231,6 @@ fn missing_token_fails_before_request() {
         .failure()
         .stderr(predicate::str::contains("token").or(predicate::str::contains("Token")));
 }
-
-// ============================================================================
-// VAL-STATUS-009 — Sends API-token auth to CTFd
-// ============================================================================
 
 #[tokio::test]
 async fn sends_token_auth_header() {
@@ -295,10 +258,6 @@ async fn sends_token_auth_header() {
         .assert()
         .success();
 }
-
-// ============================================================================
-// VAL-STATUS-009 (additional) — No username/password auth
-// ============================================================================
 
 #[tokio::test]
 async fn uses_only_token_auth_no_password_prompt() {
@@ -332,10 +291,6 @@ async fn uses_only_token_auth_no_password_prompt() {
     assert!(!stderr.contains("Password"));
     assert!(!stderr.contains("Login"));
 }
-
-// ============================================================================
-// VAL-STATUS-010 — Handles unauthorized API response
-// ============================================================================
 
 #[tokio::test]
 async fn unauthorized_401_reports_auth_error() {
@@ -379,10 +334,6 @@ async fn forbidden_403_reports_auth_error() {
         .stderr(predicate::str::contains("Unauthorized"));
 }
 
-// ============================================================================
-// VAL-STATUS-011 — Handles CTFd server errors
-// ============================================================================
-
 #[tokio::test]
 async fn server_error_500_reports_failure() {
     let server = MockServer::start().await;
@@ -403,10 +354,6 @@ async fn server_error_500_reports_failure() {
         .failure()
         .stderr(predicate::str::contains("server error").or(predicate::str::contains("500")));
 }
-
-// ============================================================================
-// VAL-STATUS-012 — Handles malformed API payloads
-// ============================================================================
 
 #[tokio::test]
 async fn malformed_json_reports_parse_error() {
@@ -479,10 +426,6 @@ async fn missing_data_field_is_error() {
         .stderr(predicate::str::contains("missing").or(predicate::str::contains("data")));
 }
 
-// ============================================================================
-// VAL-STATUS-013 — Status handles network failure
-// ============================================================================
-
 #[test]
 fn unreachable_server_reports_network_error() {
     ctfd()
@@ -498,10 +441,6 @@ fn unreachable_server_reports_network_error() {
                 .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
         );
 }
-
-// ============================================================================
-// VAL-STATUS-014 — Status output is non-sensitive
-// ============================================================================
 
 #[tokio::test]
 async fn token_not_leaked_on_success() {
@@ -637,10 +576,6 @@ fn token_not_leaked_on_network_error() {
     );
 }
 
-// ============================================================================
-// VAL-STATUS-015 — Status uses only read-only challenge endpoints
-// ============================================================================
-
 #[tokio::test]
 async fn only_calls_challenge_endpoint() {
     let server = MockServer::start().await;
@@ -665,9 +600,7 @@ async fn only_calls_challenge_endpoint() {
     // wiremock verifies exactly one request was made (to /api/v1/challenges)
 }
 
-// ============================================================================
 // Deterministic output
-// ============================================================================
 
 #[tokio::test]
 async fn output_is_deterministic() {
@@ -704,9 +637,7 @@ async fn output_is_deterministic() {
     assert_eq!(out1.stderr, out2.stderr);
 }
 
-// ============================================================================
 // Error output on stderr, not stdout
-// ============================================================================
 
 #[tokio::test]
 async fn error_output_on_stderr_only() {
@@ -739,9 +670,7 @@ async fn error_output_on_stderr_only() {
     );
 }
 
-// ============================================================================
 // Category ordering is stable (alphabetical)
-// ============================================================================
 
 #[tokio::test]
 async fn categories_sorted_alphabetically() {
@@ -780,10 +709,6 @@ async fn categories_sorted_alphabetically() {
     );
 }
 
-// ============================================================================
-// VAL-CROSS-004 — API token auth header is consistent across commands
-// ============================================================================
-
 #[tokio::test]
 async fn status_uses_token_auth_header() {
     let server = MockServer::start().await;
@@ -808,10 +733,6 @@ async fn status_uses_token_auth_header() {
         .assert()
         .success();
 }
-
-// ============================================================================
-// VAL-CROSS-005 — Status uses the configured mocked base URL
-// ============================================================================
 
 #[tokio::test]
 async fn status_uses_configured_base_url() {
@@ -838,9 +759,7 @@ async fn status_uses_configured_base_url() {
         .stdout(predicate::str::contains("URL Test"));
 }
 
-// ============================================================================
 // Trailing slash normalization works with status
-// ============================================================================
 
 #[tokio::test]
 async fn trailing_slash_url_works() {
@@ -869,9 +788,7 @@ async fn trailing_slash_url_works() {
         .stdout(predicate::str::contains("SlashTest"));
 }
 
-// ============================================================================
 // Progress summary, IDs, and filters
-// ============================================================================
 
 async fn mount_mixed_challenges(server: &MockServer) {
     Mock::given(method("GET"))

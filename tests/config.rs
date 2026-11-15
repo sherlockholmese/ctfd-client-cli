@@ -1,12 +1,11 @@
-use assert_cmd::Command;
+//! Configuration precedence, workspace discovery, and validation.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
 
 /// Start a wiremock server that serves a valid leaderboard response.
 async fn start_leaderboard_mock() -> MockServer {
@@ -23,10 +22,6 @@ async fn start_leaderboard_mock() -> MockServer {
         .await;
     server
 }
-
-// ============================================================================
-// VAL-CROSS-003: Help output makes shared configuration discoverable
-// ============================================================================
 
 #[test]
 fn help_output_lists_all_subcommands() {
@@ -104,10 +99,6 @@ fn subcommand_help_submit_mentions_config() {
         .stdout(predicate::str::contains("--token"));
 }
 
-// ============================================================================
-// VAL-CROSS-012: Help output does not echo token
-// ============================================================================
-
 #[test]
 fn help_output_does_not_leak_token_value() {
     ctfd()
@@ -118,10 +109,6 @@ fn help_output_does_not_leak_token_value() {
         .success()
         .stdout(predicate::str::contains("super-secret-token-123").not());
 }
-
-// ============================================================================
-// VAL-CONFIG-003: Empty configuration values are rejected
-// ============================================================================
 
 #[test]
 fn missing_url_reports_config_error() {
@@ -203,10 +190,6 @@ fn empty_token_env_is_rejected() {
         .stderr(predicate::str::contains("empty").or(predicate::str::contains("Empty")));
 }
 
-// ============================================================================
-// VAL-CROSS-013: Global flag placement is consistent
-// ============================================================================
-
 #[tokio::test]
 async fn global_flags_before_subcommand_leaderboard() {
     let server = start_leaderboard_mock().await;
@@ -270,10 +253,6 @@ fn global_flags_before_subcommand_submit() {
         );
 }
 
-// ============================================================================
-// VAL-CROSS-014: stdout/stderr separation
-// ============================================================================
-
 #[tokio::test]
 async fn successful_command_prints_to_stdout_not_stderr() {
     let server = start_leaderboard_mock().await;
@@ -311,10 +290,6 @@ fn config_error_prints_to_stderr() {
     );
 }
 
-// ============================================================================
-// VAL-CROSS-010: Missing token failures do not leak secrets
-// ============================================================================
-
 #[test]
 fn missing_config_error_does_not_leak_token_in_env() {
     // Set a token in env but no URL — error should be about missing URL, not leak the token
@@ -332,10 +307,6 @@ fn missing_config_error_does_not_leak_token_in_env() {
         "stderr should not contain token: {stderr}"
     );
 }
-
-// ============================================================================
-// VAL-CONFIG-001: Supported configuration sources are explicit
-// ============================================================================
 
 #[tokio::test]
 async fn flags_provide_config() {
@@ -363,10 +334,6 @@ async fn env_vars_provide_config() {
         .success();
 }
 
-// ============================================================================
-// VAL-CONFIG-002: CLI flags override environment variables
-// ============================================================================
-
 #[tokio::test]
 async fn flag_url_overrides_env_url() {
     let flag_server = start_leaderboard_mock().await;
@@ -382,10 +349,6 @@ async fn flag_url_overrides_env_url() {
         .assert()
         .success();
 }
-
-// ============================================================================
-// VAL-CROSS-001: Shared global configuration is accepted by every subcommand
-// ============================================================================
 
 #[tokio::test]
 async fn all_subcommands_accept_global_flags() {
@@ -450,10 +413,6 @@ async fn all_subcommands_accept_global_flags() {
         );
 }
 
-// ============================================================================
-// VAL-CROSS-002: Environment configuration matches flag configuration behavior
-// ============================================================================
-
 #[tokio::test]
 async fn env_and_flag_config_produce_same_acceptance() {
     let server = start_leaderboard_mock().await;
@@ -478,9 +437,7 @@ async fn env_and_flag_config_produce_same_acceptance() {
         .success();
 }
 
-// ============================================================================
 // Whitespace handling: flag and env values are trimmed consistently
-// ============================================================================
 
 #[tokio::test]
 async fn whitespace_around_flag_url_is_trimmed() {
@@ -568,9 +525,7 @@ async fn flag_and_env_whitespace_handling_produces_same_result() {
     assert_eq!(output_flag.stdout, output_env.stdout);
 }
 
-// ============================================================================
 // Error message clarity
-// ============================================================================
 
 #[test]
 fn config_error_messages_are_user_friendly() {
@@ -591,10 +546,6 @@ fn config_error_messages_are_user_friendly() {
         "Error should mention URL: {stderr}"
     );
 }
-
-// ============================================================================
-// VAL-CONFIG-005: ctfd.toml provides URL and token for every subcommand
-// ============================================================================
 
 #[tokio::test]
 async fn toml_config_provides_url_and_token_for_leaderboard() {
@@ -732,10 +683,6 @@ async fn toml_config_provides_url_and_token_for_download() {
     assert!(content.contains("Download via toml"));
 }
 
-// ============================================================================
-// VAL-CONFIG-006: Configuration precedence — flags > env > ctfd.toml
-// ============================================================================
-
 #[tokio::test]
 async fn toml_config_flags_override_toml() {
     // Flag URL points to flag_server; toml URL points to toml_server.
@@ -835,10 +782,6 @@ async fn toml_config_flag_url_env_token_overrides_toml_both() {
         .stdout(predicate::str::contains("MixedTeam"));
 }
 
-// ============================================================================
-// VAL-CONFIG-007: Malformed ctfd.toml fails before network
-// ============================================================================
-
 #[tokio::test]
 async fn toml_config_malformed_fails_before_network() {
     let server = MockServer::start().await;
@@ -902,10 +845,6 @@ async fn toml_config_non_string_token_fails_before_network() {
         .stderr(predicate::str::contains("invalid"));
 }
 
-// ============================================================================
-// VAL-CONFIG-008: Empty ctfd.toml values rejected
-// ============================================================================
-
 #[tokio::test]
 async fn toml_config_empty_url_rejected_before_network() {
     let dir = tempfile::tempdir().unwrap();
@@ -956,10 +895,6 @@ async fn toml_config_whitespace_only_url_rejected_before_network() {
         .stderr(predicate::str::contains("ctfd.toml"))
         .stderr(predicate::str::contains("empty"));
 }
-
-// ============================================================================
-// VAL-CONFIG-009: ctfd.toml resolved from process current directory
-// ============================================================================
 
 #[tokio::test]
 async fn toml_config_current_directory_only() {
@@ -1034,9 +969,7 @@ async fn toml_config_not_found_in_other_directory() {
         .stderr(predicate::str::contains("URL").or(predicate::str::contains("url")));
 }
 
-// ============================================================================
 // Token secrecy: ctfd.toml token values must not appear in output
-// ============================================================================
 
 #[tokio::test]
 async fn toml_config_token_not_in_error_output() {
@@ -1186,9 +1119,7 @@ async fn toml_config_missing_url_with_token_does_not_leak_token() {
     );
 }
 
-// ============================================================================
 // ctfd.toml with empty file is treated as no config
-// ============================================================================
 
 #[tokio::test]
 async fn toml_config_empty_file_falls_through_to_missing_error() {
@@ -1206,9 +1137,7 @@ async fn toml_config_empty_file_falls_through_to_missing_error() {
         .stderr(predicate::str::contains("URL").or(predicate::str::contains("url")));
 }
 
-// ============================================================================
 // ctfd.toml flags override env overrides toml — full precedence chain
-// ============================================================================
 
 #[tokio::test]
 async fn toml_config_full_precedence_chain() {
@@ -1246,10 +1175,6 @@ async fn toml_config_full_precedence_chain() {
         .success()
         .stdout(predicate::str::contains("FullPrecedence"));
 }
-
-// ============================================================================
-// Auto-submit config resolution (VAL-CONFIG-010)
-// ============================================================================
 
 /// Mount a submit mock that expects a specific auto-detected challenge ID.
 async fn mount_auto_submit_mock(

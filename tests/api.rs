@@ -1,20 +1,11 @@
-use assert_cmd::Command;
+//! CTFd envelope handling, authentication, and API routes.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
-
-// ============================================================================
-// VAL-API-001: Parses standard CTFd success envelopes
-//
-// Each networked command parses CTFd-style `{"success":true,"data":...}`
-// responses.  Verify that mocked success envelopes drive expected user-facing
-// output for leaderboard, challenge list, challenge detail, and submit flows.
-// ============================================================================
 
 #[tokio::test]
 async fn api_leaderboard_parses_success_envelope() {
@@ -168,14 +159,6 @@ async fn api_submit_parses_success_envelope() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
-// VAL-API-002: Reports standard CTFd error envelopes
-//
-// All networked commands treat `{"success":false,"errors":[...]}`
-// as API failures even with HTTP 200.  Verify each command reports the
-// error and exits non-zero without leaking the token.
-// ============================================================================
-
 #[tokio::test]
 async fn api_leaderboard_reports_error_envelope() {
     let server = MockServer::start().await;
@@ -317,9 +300,7 @@ async fn api_submit_reports_error_envelope() {
         .stderr(predicate::str::contains("Maximum attempts exceeded"));
 }
 
-// ============================================================================
 // Token is never leaked in error envelope output
-// ============================================================================
 
 #[tokio::test]
 async fn api_error_envelope_does_not_leak_token_leaderboard() {
@@ -415,13 +396,6 @@ async fn api_error_envelope_does_not_leak_token_submit() {
     assert!(!stdout.contains(secret));
     assert!(!stderr.contains(secret));
 }
-
-// ============================================================================
-// VAL-API-003: Uses CTFd-compatible endpoint paths and methods
-//
-// Verify that each command uses the exact expected HTTP method and API path
-// and that wiremock rejects unrelated/hard-coded paths.
-// ============================================================================
 
 #[tokio::test]
 async fn api_leaderboard_uses_correct_method_and_path() {
@@ -539,9 +513,7 @@ async fn api_submit_uses_correct_method_and_path() {
         .success();
 }
 
-// ============================================================================
 // Verify that download detail endpoint uses the correct challenge ID in path
-// ============================================================================
 
 #[tokio::test]
 async fn api_download_detail_path_uses_correct_challenge_id() {
@@ -588,9 +560,7 @@ async fn api_download_detail_path_uses_correct_challenge_id() {
     assert!(temp.path().join("Misc/Seven/README.md").exists());
 }
 
-// ============================================================================
 // Verify submit body contains numeric challenge_id and string submission
-// ============================================================================
 
 #[tokio::test]
 async fn api_submit_body_matches_ctfd_schema() {
@@ -622,9 +592,7 @@ async fn api_submit_body_matches_ctfd_schema() {
         .success();
 }
 
-// ============================================================================
 // Verify auth header is Token type, not Bearer or Basic
-// ============================================================================
 
 #[tokio::test]
 async fn api_auth_header_uses_token_prefix() {
@@ -651,9 +619,7 @@ async fn api_auth_header_uses_token_prefix() {
         .success();
 }
 
-// ============================================================================
 // Error envelope with multiple error messages is reported fully
-// ============================================================================
 
 #[tokio::test]
 async fn api_error_envelope_with_multiple_errors() {
@@ -681,9 +647,7 @@ async fn api_error_envelope_with_multiple_errors() {
         .stderr(predicate::str::contains("Second error"));
 }
 
-// ============================================================================
 // Challenge detail missing data field reports clear error
-// ============================================================================
 
 #[tokio::test]
 async fn api_challenge_detail_missing_data_field() {
@@ -720,10 +684,8 @@ async fn api_challenge_detail_missing_data_field() {
         .stderr(predicate::str::contains("missing").or(predicate::str::contains("data")));
 }
 
-// ============================================================================
 // CTFd only honours token auth with a JSON content type; unexpected
 // responses are shown in full
-// ============================================================================
 
 #[tokio::test]
 async fn get_requests_send_json_content_type() {

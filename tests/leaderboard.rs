@@ -1,16 +1,11 @@
-use assert_cmd::Command;
+//! Printed scoreboard behavior and server failures.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
-
-// ============================================================================
-// VAL-LEADERBOARD-001: Requires configured CTFd URL
-// ============================================================================
 
 #[test]
 fn missing_url_fails_before_request() {
@@ -24,10 +19,6 @@ fn missing_url_fails_before_request() {
         .stderr(predicate::str::contains("URL"));
 }
 
-// ============================================================================
-// VAL-LEADERBOARD-003: Requires API-token authentication
-// ============================================================================
-
 #[test]
 fn missing_token_fails_before_request() {
     ctfd()
@@ -39,11 +30,6 @@ fn missing_token_fails_before_request() {
         .failure()
         .stderr(predicate::str::contains("token").or(predicate::str::contains("Token")));
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-002 — Accepts configured CTFd URL
-// VAL-LEADERBOARD-004 — Sends API token on leaderboard request
-// ============================================================================
 
 #[tokio::test]
 async fn configured_url_and_token_reach_mock() {
@@ -72,10 +58,6 @@ async fn configured_url_and_token_reach_mock() {
         .success()
         .stdout(predicate::str::contains("Team A"));
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-005 — Does not support interactive or password auth
-// ============================================================================
 
 #[tokio::test]
 async fn uses_only_token_auth_no_password_prompt() {
@@ -111,10 +93,6 @@ async fn uses_only_token_auth_no_password_prompt() {
     assert!(!stderr.contains("Login"));
 }
 
-// ============================================================================
-// VAL-LEADERBOARD-006 — Fetches leaderboard from mocked CTFd API
-// ============================================================================
-
 #[tokio::test]
 async fn only_calls_leaderboard_endpoint() {
     let server = MockServer::start().await;
@@ -144,10 +122,6 @@ async fn only_calls_leaderboard_endpoint() {
 
     // wiremock verifies exactly one request was made (to scoreboard)
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-007 — Displays ranked users or teams
-// ============================================================================
 
 #[tokio::test]
 async fn displays_all_ranked_entries() {
@@ -181,10 +155,6 @@ async fn displays_all_ranked_entries() {
         .stdout(predicate::str::contains("4200"))
         .stdout(predicate::str::contains("3800"));
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-008 — Preserves leaderboard ordering
-// ============================================================================
 
 #[tokio::test]
 async fn preserves_api_ordering() {
@@ -224,10 +194,6 @@ async fn preserves_api_ordering() {
     assert!(second_pos < third_pos, "Second should appear before Third");
 }
 
-// ============================================================================
-// VAL-LEADERBOARD-009 — Handles empty leaderboard
-// ============================================================================
-
 #[tokio::test]
 async fn empty_leaderboard_shows_message() {
     let server = MockServer::start().await;
@@ -251,10 +217,6 @@ async fn empty_leaderboard_shows_message() {
         .success()
         .stdout(predicate::str::contains("No leaderboard entries"));
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-010 — Handles unauthorized API response
-// ============================================================================
 
 #[tokio::test]
 async fn unauthorized_401_reports_auth_error() {
@@ -298,10 +260,6 @@ async fn forbidden_403_reports_auth_error() {
         .stderr(predicate::str::contains("Unauthorized"));
 }
 
-// ============================================================================
-// VAL-LEADERBOARD-011 — Handles server error response
-// ============================================================================
-
 #[tokio::test]
 async fn server_error_500_reports_failure() {
     let server = MockServer::start().await;
@@ -322,10 +280,6 @@ async fn server_error_500_reports_failure() {
         .failure()
         .stderr(predicate::str::contains("server error").or(predicate::str::contains("500")));
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-012 — Handles malformed leaderboard JSON
-// ============================================================================
 
 #[tokio::test]
 async fn malformed_json_reports_parse_error() {
@@ -375,10 +329,6 @@ async fn success_false_envelope_is_error() {
         .stderr(predicate::str::contains("Leaderboard not available"));
 }
 
-// ============================================================================
-// VAL-LEADERBOARD-013 — Handles network failure
-// ============================================================================
-
 #[test]
 fn unreachable_server_reports_network_error() {
     // Use a port in the ephemeral range that should not have a listener.
@@ -396,10 +346,6 @@ fn unreachable_server_reports_network_error() {
                 .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
         );
 }
-
-// ============================================================================
-// VAL-LEADERBOARD-014 — Keeps output user-facing and non-sensitive
-// ============================================================================
 
 #[tokio::test]
 async fn token_not_leaked_on_success() {
@@ -540,10 +486,6 @@ fn token_not_leaked_on_network_error() {
     );
 }
 
-// ============================================================================
-// VAL-LEADERBOARD-015 — Uses deterministic CLI output suitable for assertions
-// ============================================================================
-
 #[tokio::test]
 async fn output_is_deterministic() {
     let server = MockServer::start().await;
@@ -579,10 +521,6 @@ async fn output_is_deterministic() {
     assert_eq!(out1.stderr, out2.stderr);
 }
 
-// ============================================================================
-// VAL-CROSS-004 — API token auth header is consistent across commands
-// ============================================================================
-
 #[tokio::test]
 async fn leaderboard_uses_token_auth_header() {
     let server = MockServer::start().await;
@@ -608,10 +546,6 @@ async fn leaderboard_uses_token_auth_header() {
         .success();
 }
 
-// ============================================================================
-// VAL-CROSS-006 — Leaderboard uses the configured mocked base URL
-// ============================================================================
-
 #[tokio::test]
 async fn leaderboard_uses_configured_base_url() {
     let server = MockServer::start().await;
@@ -636,10 +570,6 @@ async fn leaderboard_uses_configured_base_url() {
         .success()
         .stdout(predicate::str::contains("URL Test"));
 }
-
-// ============================================================================
-// VAL-CONFIG-004 — Base URL trailing slash is normalized
-// ============================================================================
 
 #[tokio::test]
 async fn trailing_slash_url_works() {
@@ -669,10 +599,6 @@ async fn trailing_slash_url_works() {
         .stdout(predicate::str::contains("Slash"));
 }
 
-// ============================================================================
-// Additional: VAL-API-001 — Parses standard CTFd success envelopes
-// ============================================================================
-
 #[tokio::test]
 async fn parses_standard_success_envelope() {
     let server = MockServer::start().await;
@@ -698,9 +624,7 @@ async fn parses_standard_success_envelope() {
         .stdout(predicate::str::contains("EnvTest"));
 }
 
-// ============================================================================
 // Additional: Error rendered on stderr, not stdout
-// ============================================================================
 
 #[tokio::test]
 async fn error_output_on_stderr_only() {
@@ -734,9 +658,7 @@ async fn error_output_on_stderr_only() {
     );
 }
 
-// ============================================================================
 // Dynamic column sizing: long names and large scores remain readable
-// ============================================================================
 
 #[tokio::test]
 async fn long_names_are_not_truncated() {
@@ -870,9 +792,7 @@ async fn column_alignment_works_with_mixed_widths() {
     assert_eq!(output.stdout, output2.stdout);
 }
 
-// ============================================================================
 // Plain printout: header, qualifying line, your row
-// ============================================================================
 
 async fn mount_board(server: &MockServer) {
     Mock::given(method("GET"))
@@ -988,9 +908,7 @@ async fn invalid_qualify_is_reported() {
         .stderr(predicate::str::contains("invalid cutoff value"));
 }
 
-// ============================================================================
 // `since`: ignore points scored before a given time
-// ============================================================================
 
 async fn mount_since_board(server: &MockServer) {
     Mock::given(method("GET"))

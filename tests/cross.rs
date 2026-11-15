@@ -1,18 +1,15 @@
-use assert_cmd::Command;
+//! Command interoperability and shared configuration behavior.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
-
-// ============================================================================
 // Shared fixture: a mock server with endpoints for all four commands.
 //
 // Returns (server, url, token) so tests can run against a single mock.
-// ============================================================================
 
 struct CrossMock {
     #[allow(dead_code)]
@@ -121,13 +118,6 @@ async fn start_cross_mock() -> CrossMock {
     CrossMock { server, url, token }
 }
 
-// ============================================================================
-// VAL-CROSS-001: Shared Global Configuration Is Accepted By Every Subcommand
-//
-// All subcommands accept the same global CTFd URL and token (flags or env).
-// Each resolves config consistently before making API requests.
-// ============================================================================
-
 #[tokio::test]
 async fn cross_all_commands_accept_shared_flag_config() {
     let mock = start_cross_mock().await;
@@ -225,13 +215,6 @@ async fn cross_all_commands_accept_shared_env_config() {
         .success()
         .stdout(predicate::str::contains("Flag accepted"));
 }
-
-// ============================================================================
-// VAL-CROSS-002: Environment Configuration Matches Flag Configuration
-//
-// Each subcommand produces the same observable behavior with environment
-// variables as with equivalent flags.
-// ============================================================================
 
 #[tokio::test]
 async fn cross_leaderboard_env_matches_flag_behavior() {
@@ -355,13 +338,6 @@ async fn cross_submit_env_matches_flag_behavior() {
     assert_eq!(out_flag.stdout, out_env.stdout);
 }
 
-// ============================================================================
-// VAL-CROSS-004: API Token Auth Header Is Consistent Across Commands
-//
-// All networked subcommands send API-token authentication using the same
-// `Authorization: Token <token>` header format.
-// ============================================================================
-
 #[tokio::test]
 async fn cross_auth_header_consistent_across_all_commands() {
     let token = "consistent-auth-token";
@@ -482,13 +458,6 @@ async fn cross_auth_header_consistent_across_all_commands() {
     }
 }
 
-// ============================================================================
-// VAL-CROSS-005: Commands Share The Same Mocked Base URL
-//
-// Download, status, and submit operate against the configured base URL
-// and never fall back to hard-coded or default URLs.
-// ============================================================================
-
 #[tokio::test]
 async fn cross_all_commands_use_same_mock_server() {
     let mock = start_cross_mock().await;
@@ -538,10 +507,6 @@ async fn cross_all_commands_use_same_mock_server() {
         .success();
 }
 
-// ============================================================================
-// VAL-CROSS-006: Leaderboard Uses The Configured Mocked Base URL
-// ============================================================================
-
 #[tokio::test]
 async fn cross_leaderboard_uses_configured_mock_url() {
     let mock = start_cross_mock().await;
@@ -557,13 +522,6 @@ async fn cross_leaderboard_uses_configured_mock_url() {
         .stdout(predicate::str::contains("CrossTeam"))
         .stdout(predicate::str::contains("5000"));
 }
-
-// ============================================================================
-// VAL-CROSS-007: Download Output Structure Is Stable With Shared Config
-//
-// When download succeeds against the shared mocked base URL, it writes
-// README.md, attachments, and metadata.json under category/challenge-name.
-// ============================================================================
 
 #[tokio::test]
 async fn cross_download_output_structure_with_shared_config() {
@@ -627,13 +585,6 @@ async fn cross_download_output_structure_with_shared_config() {
     assert!(stdout.contains("2"), "Should mention 2 challenges");
 }
 
-// ============================================================================
-// VAL-CROSS-008: Status Reflects Mocked Challenge State Consistently
-//
-// Status reports challenge state from the configured mocked API and remains
-// consistent with challenge names/IDs used by download and submit fixtures.
-// ============================================================================
-
 #[tokio::test]
 async fn cross_status_consistent_with_download_and_submit_context() {
     let mock = start_cross_mock().await;
@@ -667,13 +618,6 @@ async fn cross_status_consistent_with_download_and_submit_context() {
     // (verified implicitly because the mock would reject wrong IDs)
 }
 
-// ============================================================================
-// VAL-CROSS-009: Submit Sends Flag To Same Mocked Challenge Context
-//
-// Submit posts to the configured mocked CTFd API using the same auth and
-// base URL resolution as status and download.
-// ============================================================================
-
 #[tokio::test]
 async fn cross_submit_uses_same_challenge_context_as_other_commands() {
     let mock = start_cross_mock().await;
@@ -691,13 +635,6 @@ async fn cross_submit_uses_same_challenge_context_as_other_commands() {
         .success()
         .stdout(predicate::str::contains("Flag accepted"));
 }
-
-// ============================================================================
-// VAL-CROSS-010: Missing Token Failures Do Not Leak Secrets
-//
-// Every subcommand with missing/invalid token fails with actionable errors
-// that never print token values.
-// ============================================================================
 
 #[test]
 fn cross_missing_token_does_not_leak_on_leaderboard() {
@@ -779,13 +716,6 @@ fn cross_missing_token_does_not_leak_on_submit() {
     assert!(!stderr.contains(secret));
     assert!(!stdout.contains(secret));
 }
-
-// ============================================================================
-// VAL-CROSS-011: Network And API Failures Do Not Leak Tokens
-//
-// Transport errors, non-2xx responses, and malformed JSON across all
-// commands never include configured tokens in output.
-// ============================================================================
 
 #[test]
 fn cross_network_failure_no_token_leak_leaderboard() {
@@ -945,13 +875,6 @@ async fn cross_api_failure_no_token_leak_all_commands() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains(token));
 }
 
-// ============================================================================
-// VAL-CROSS-012: Help And Validation Errors Avoid Token Echoing
-//
-// Argument validation errors and help output never echo environment-provided
-// or flag-provided API token values.
-// ============================================================================
-
 #[test]
 fn cross_help_output_no_token_echo_with_flag() {
     let token = "help-flag-token-echo";
@@ -1023,13 +946,6 @@ fn cross_validation_error_no_token_echo_submit_missing_args() {
     assert!(!stdout.contains(token));
     assert!(!stderr.contains(token));
 }
-
-// ============================================================================
-// VAL-CROSS-014: Command Output Separates User Results From Diagnostics
-//
-// Successful output is on stdout; diagnostics/failures on stderr.
-// This separation is consistent across all commands.
-// ============================================================================
 
 #[tokio::test]
 async fn cross_stdout_stderr_separation_leaderboard() {
@@ -1124,9 +1040,7 @@ async fn cross_stdout_stderr_separation_submit() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("Flag accepted"));
 }
 
-// ============================================================================
 // Failure mode: stderr contains diagnostics, stdout is empty
-// ============================================================================
 
 #[tokio::test]
 async fn cross_error_diagnostics_on_stderr_only_leaderboard() {
@@ -1221,14 +1135,6 @@ async fn cross_error_diagnostics_on_stderr_only_submit() {
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid flag"));
 }
-
-// ============================================================================
-// VAL-CROSS-015: Sequential Cross-Command Flow Uses One Configuration Source
-//
-// A realistic sequence of status -> download -> submit against one mocked
-// CTFd base URL with one API token, where each command independently
-// honors the same configuration source.
-// ============================================================================
 
 #[tokio::test]
 async fn cross_sequential_status_download_submit_flow_with_single_config() {
@@ -1337,9 +1243,7 @@ async fn cross_sequential_status_download_submit_flow_with_single_config() {
     // The mock server received all expected requests with the same auth header.
 }
 
-// ============================================================================
 // Additional: flags override env even in cross-command flow
-// ============================================================================
 
 #[tokio::test]
 async fn cross_flag_overrides_env_in_sequential_flow() {
@@ -1399,10 +1303,8 @@ async fn cross_flag_overrides_env_in_sequential_flow() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
 // ctfd.toml cross-command tests
 // All subcommands can use ctfd.toml config and precedence is respected.
-// ============================================================================
 
 #[tokio::test]
 async fn cross_all_commands_accept_shared_toml_config() {

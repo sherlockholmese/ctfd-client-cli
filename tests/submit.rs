@@ -1,12 +1,11 @@
-use assert_cmd::Command;
+//! Flag submission, challenge resolution, and exit codes.
+
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Get a command for the ctfdc binary.
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
 
 /// Build a mock submit response for a given status string.
 fn submit_response(status: &str, message: &str) -> serde_json::Value {
@@ -41,10 +40,6 @@ async fn mount_submit_mock(
         .await;
 }
 
-// ============================================================================
-// VAL-SUBMIT-001: Accepted flag reports success
-// ============================================================================
-
 #[tokio::test]
 async fn accepted_flag_reports_success() {
     let server = MockServer::start().await;
@@ -71,11 +66,6 @@ async fn accepted_flag_reports_success() {
         .success()
         .stdout(predicate::str::contains("Flag accepted"));
 }
-
-// ============================================================================
-// VAL-SUBMIT-002: Rejected flag reports failure without process error
-// VAL-SUBMIT-016: Rejected flag exit semantics are stable
-// ============================================================================
 
 #[tokio::test]
 async fn rejected_flag_reports_failure() {
@@ -104,11 +94,6 @@ async fn rejected_flag_reports_failure() {
         .stderr(predicate::str::contains("rejected"));
 }
 
-// ============================================================================
-// VAL-SUBMIT-003: Already-solved response is distinct
-// VAL-SUBMIT-017: Already-solved exit semantics are stable
-// ============================================================================
-
 #[tokio::test]
 async fn already_solved_reports_distinctly() {
     let server = MockServer::start().await;
@@ -136,10 +121,6 @@ async fn already_solved_reports_distinctly() {
         .stdout(predicate::str::contains("already solved"));
 }
 
-// ============================================================================
-// VAL-SUBMIT-004: Challenge argument is required
-// ============================================================================
-
 #[test]
 fn challenge_argument_required() {
     ctfd()
@@ -156,11 +137,6 @@ fn challenge_argument_required() {
                 .or(predicate::str::contains("CHALLENGE_ID")),
         );
 }
-
-// ============================================================================
-// VAL-SUBMIT-005: Single-arg submit in auto-detect mode fails outside
-//                  challenge directory (no metadata, no path match)
-// ============================================================================
 
 #[test]
 fn single_arg_submit_fails_outside_challenge_directory() {
@@ -183,10 +159,6 @@ fn single_arg_submit_fails_outside_challenge_directory() {
                 .or(predicate::str::contains("challenge")),
         );
 }
-
-// ============================================================================
-// VAL-SUBMIT-006: Challenge and flag arguments are forwarded exactly
-// ============================================================================
 
 #[tokio::test]
 async fn arguments_forwarded_exactly() {
@@ -215,10 +187,6 @@ async fn arguments_forwarded_exactly() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
-// VAL-SUBMIT-007: API-token authentication is required
-// ============================================================================
-
 #[test]
 fn missing_token_fails_before_request() {
     ctfd()
@@ -232,10 +200,6 @@ fn missing_token_fails_before_request() {
         .failure()
         .stderr(predicate::str::contains("token").or(predicate::str::contains("Token")));
 }
-
-// ============================================================================
-// VAL-SUBMIT-008: Submit uses API-token auth only
-// ============================================================================
 
 #[tokio::test]
 async fn submit_uses_token_auth_only() {
@@ -274,10 +238,6 @@ async fn submit_uses_token_auth_only() {
     assert!(!stderr.contains("Basic "));
 }
 
-// ============================================================================
-// VAL-SUBMIT-009: Configured CTFd URL controls submit endpoint
-// ============================================================================
-
 #[tokio::test]
 async fn configured_url_controls_endpoint() {
     let server = MockServer::start().await;
@@ -304,10 +264,6 @@ async fn configured_url_controls_endpoint() {
         .success();
 }
 
-// ============================================================================
-// VAL-SUBMIT-010: Missing CTFd URL is reported as configuration error
-// ============================================================================
-
 #[test]
 fn missing_url_reports_configuration_error() {
     ctfd()
@@ -321,10 +277,6 @@ fn missing_url_reports_configuration_error() {
         .failure()
         .stderr(predicate::str::contains("URL"));
 }
-
-// ============================================================================
-// VAL-SUBMIT-011: Unauthorized API response is reported clearly
-// ============================================================================
 
 #[tokio::test]
 async fn unauthorized_response_reported_clearly() {
@@ -352,10 +304,6 @@ async fn unauthorized_response_reported_clearly() {
         );
 }
 
-// ============================================================================
-// VAL-SUBMIT-012: Server-side API failure is reported clearly
-// ============================================================================
-
 #[tokio::test]
 async fn server_error_reported_clearly() {
     let server = MockServer::start().await;
@@ -379,10 +327,6 @@ async fn server_error_reported_clearly() {
         .failure()
         .stderr(predicate::str::contains("server").or(predicate::str::contains("500")));
 }
-
-// ============================================================================
-// VAL-SUBMIT-013: Malformed API response is reported clearly
-// ============================================================================
 
 #[tokio::test]
 async fn malformed_response_reported_clearly() {
@@ -412,10 +356,6 @@ async fn malformed_response_reported_clearly() {
         );
 }
 
-// ============================================================================
-// VAL-SUBMIT-014: Network failure is reported clearly
-// ============================================================================
-
 #[test]
 fn network_failure_reported_clearly() {
     ctfd()
@@ -433,10 +373,6 @@ fn network_failure_reported_clearly() {
                 .or(predicate::str::contains("connection").or(predicate::str::contains("request"))),
         );
 }
-
-// ============================================================================
-// VAL-SUBMIT-015: Token is never printed
-// ============================================================================
 
 #[tokio::test]
 async fn token_not_leaked_accepted() {
@@ -551,10 +487,6 @@ fn token_not_leaked_on_network_error() {
     assert!(!stdout.contains(token));
     assert!(!stderr.contains(token));
 }
-
-// ============================================================================
-// VAL-SUBMIT-018: Non-numeric challenge argument is resolved by name
-// ============================================================================
 
 async fn mount_named_challenges(server: &MockServer) {
     Mock::given(method("GET"))
@@ -856,10 +788,6 @@ async fn auto_submit_marks_local_metadata_solved() {
     assert_eq!(value["id"], serde_json::json!(5));
 }
 
-// ============================================================================
-// VAL-SUBMIT-019: Flags with spaces are forwarded exactly
-// ============================================================================
-
 #[tokio::test]
 async fn flag_with_spaces_forwarded_exactly() {
     let server = MockServer::start().await;
@@ -888,10 +816,6 @@ async fn flag_with_spaces_forwarded_exactly() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
-// VAL-API-002: success=false envelope is treated as API failure
-// ============================================================================
-
 #[tokio::test]
 async fn success_false_envelope_treated_as_error() {
     let server = MockServer::start().await;
@@ -919,9 +843,7 @@ async fn success_false_envelope_treated_as_error() {
         .stderr(predicate::str::contains("error"));
 }
 
-// ============================================================================
 // Output is deterministic and token never appears in help/usage errors
-// ============================================================================
 
 #[test]
 fn token_not_leaked_in_argument_errors() {
@@ -943,10 +865,6 @@ fn token_not_leaked_in_argument_errors() {
     assert!(!stderr.contains(token));
 }
 
-// ============================================================================
-// Auto-detect submit tests (VAL-SUBMIT-020 through VAL-SUBMIT-027)
-// ============================================================================
-
 /// Mount a mock for the challenge list endpoint.
 async fn mount_challenge_list_mock(
     server: &MockServer,
@@ -965,10 +883,6 @@ async fn mount_challenge_list_mock(
         .mount(server)
         .await;
 }
-
-// ============================================================================
-// VAL-SUBMIT-020: Auto-submit reads metadata challenge ID
-// ============================================================================
 
 #[tokio::test]
 async fn auto_submit_reads_metadata_challenge_id() {
@@ -1017,10 +931,6 @@ async fn auto_submit_reads_metadata_challenge_id() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
-// VAL-SUBMIT-021: Auto-submit falls back to path match
-// ============================================================================
-
 #[tokio::test]
 async fn auto_submit_falls_back_to_path_match() {
     let server = MockServer::start().await;
@@ -1067,10 +977,6 @@ async fn auto_submit_falls_back_to_path_match() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
-// VAL-SUBMIT-022: Auto-submit reports outside challenge directory
-// ============================================================================
-
 #[tokio::test]
 async fn auto_submit_reports_outside_challenge_directory() {
     let server = MockServer::start().await;
@@ -1102,10 +1008,6 @@ async fn auto_submit_reports_outside_challenge_directory() {
         .failure()
         .stderr(predicate::str::contains("Cannot auto-detect"));
 }
-
-// ============================================================================
-// VAL-SUBMIT-023: Auto-submit reports missing path match
-// ============================================================================
 
 #[tokio::test]
 async fn auto_submit_reports_missing_path_match() {
@@ -1140,10 +1042,6 @@ async fn auto_submit_reports_missing_path_match() {
         .stderr(predicate::str::contains("no challenge matches"));
 }
 
-// ============================================================================
-// VAL-SUBMIT-024: Auto-submit reports ambiguous path match
-// ============================================================================
-
 #[tokio::test]
 async fn auto_submit_reports_ambiguous_path_match() {
     let server = MockServer::start().await;
@@ -1177,10 +1075,6 @@ async fn auto_submit_reports_ambiguous_path_match() {
         .failure()
         .stderr(predicate::str::contains("multiple challenges match"));
 }
-
-// ============================================================================
-// VAL-SUBMIT-025: Auto-submit reports malformed metadata
-// ============================================================================
 
 #[test]
 fn auto_submit_reports_malformed_metadata() {
@@ -1239,10 +1133,6 @@ fn auto_submit_reports_metadata_missing_id() {
         .failure()
         .stderr(predicate::str::contains("malformed").or(predicate::str::contains("metadata")));
 }
-
-// ============================================================================
-// VAL-SUBMIT-026: Auto-submit does not leak tokens
-// ============================================================================
 
 #[test]
 fn auto_submit_token_not_leaked_malformed_metadata() {
@@ -1315,10 +1205,6 @@ async fn auto_submit_token_not_leaked_on_network_error() {
     assert!(!stderr.contains(token));
 }
 
-// ============================================================================
-// VAL-SUBMIT-027: Explicit challenge ID submit remains supported
-// ============================================================================
-
 #[tokio::test]
 async fn explicit_submit_still_works_without_auto_detect() {
     let server = MockServer::start().await;
@@ -1351,9 +1237,7 @@ async fn explicit_submit_still_works_without_auto_detect() {
         .stdout(predicate::str::contains("Flag accepted"));
 }
 
-// ============================================================================
 // Additional: Auto-submit with metadata.json present but in non-challenge dir
-// ============================================================================
 
 #[test]
 fn auto_submit_with_metadata_in_non_challenge_dir_still_works() {

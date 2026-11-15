@@ -247,6 +247,9 @@ since = 2026-11-07T09:00:00+08:00   # without an offset it is local time
 
 ## Test / Validation
 
+For the source map, request flows, and contributor guidance, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 Run the standard checks:
 
 ```sh

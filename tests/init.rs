@@ -1,15 +1,11 @@
 //! `ctfdc init`: verify and save workspace configuration.
 
-use assert_cmd::Command;
+mod common;
+
+use common::ctfd;
 use predicates::prelude::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-fn ctfd() -> Command {
-    let mut cmd = Command::cargo_bin("ctfdc").expect("ctfdc binary should exist");
-    cmd.env_remove("CTFD_URL").env_remove("CTFD_TOKEN");
-    cmd
-}
 
 async fn mount_me(server: &MockServer, token: &str) {
     Mock::given(method("GET"))

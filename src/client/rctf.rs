@@ -7,26 +7,32 @@
 //! where it exists, else v1) and converts it to the models the commands
 //! already use:
 //!
-//! - IDs become stable numbers ([`num_id`]); the client remembers the
+//! - IDs become stable numbers ([`numeric_id`]); the client remembers the
 //!   original string for routes that need it.
 //! - Times become RFC 3339 strings, as CTFd sends them.
 //! - Submission outcomes map to CTFd's `correct` / `incorrect` / ... .
 
-use super::{CtfdClient, CtfdError, DenyKind, ResponseDump};
+mod transport;
+mod wire;
+
+use super::{CtfdClient, CtfdError};
 use crate::models::{
     AccountSolve, Challenge, ChallengeDetail, ScoreEvent, ScoreboardEntry, SolvedChallenge,
     SubmitResponse, TopEntry, UserMe,
 };
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use wire::{
+    Attachment, ChallengePoints, Envelope, Graph, LeaderboardEntry, LeaderboardPage, Profile,
+    RctfChallenge,
+};
 
 /// Leaderboard page size; rCTF caps it per deployment, so pages may come
 /// back shorter.
-const PAGE: usize = 100;
+const LEADERBOARD_PAGE_SIZE: usize = 100;
 /// Safety stop for leaderboard paging.
-const MAX_PAGES: usize = 200;
+const MAX_LEADERBOARD_PAGES: usize = 200;
 
 /// Per-client rCTF state: the auth token and string IDs seen so far.
 #[derive(Default)]
@@ -34,13 +40,13 @@ pub(super) struct State {
     auth: tokio::sync::OnceCell<String>,
     challenge_ids: Mutex<HashMap<u64, String>>,
     team_ids: Mutex<HashMap<u64, String>>,
-    challenges: Mutex<Option<Vec<Chall>>>,
+    challenges: Mutex<Option<Vec<RctfChallenge>>>,
 }
 
 /// A stable numeric ID for an rCTF string ID: the number itself when the
 /// ID is a small number, else a 9-digit hash (FNV-1a), so `ctfdc s 123456789`
 /// and metadata.json keep working across runs.
-pub fn num_id(id: &str) -> u64 {
+pub fn numeric_id(id: &str) -> u64 {
     if let Ok(n) = id.parse::<u64>()
         && n < 100_000_000
     {
@@ -55,7 +61,7 @@ pub fn num_id(id: &str) -> u64 {
 }
 
 fn remember(map: &Mutex<HashMap<u64, String>>, id: &str) -> u64 {
-    let n = num_id(id);
+    let n = numeric_id(id);
     if let Ok(mut map) = map.lock() {
         map.entry(n).or_insert_with(|| id.to_string());
     }
@@ -67,343 +73,15 @@ fn lookup(map: &Mutex<HashMap<u64, String>>, n: u64) -> Option<String> {
 }
 
 /// Milliseconds since the epoch as RFC 3339.
-fn iso(ms: i64) -> String {
+fn timestamp_from_millis(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
         .unwrap_or_default()
         .to_rfc3339()
 }
 
-/// rCTF IDs are strings, but accept numbers too.
-fn de_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::String(s) => s,
-        other => other.to_string(),
-    })
-}
-
-// ----------------------------------------------------------------------
-// Wire types (lenient: v1 and v2 differ in optional fields)
-// ----------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct Envelope {
-    kind: String,
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    data: Option<Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct Chall {
-    #[serde(deserialize_with = "de_id")]
-    id: String,
-    name: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    category: String,
-    #[serde(default)]
-    author: String,
-    #[serde(default)]
-    files: Vec<File>,
-    #[serde(default)]
-    points: Option<i64>,
-    #[serde(default)]
-    solves: Option<u64>,
-    #[serde(default)]
-    tags: Option<Vec<String>>,
-    #[serde(default, rename = "yourScore")]
-    your_score: Option<i64>,
-    #[serde(default, rename = "scoringKind")]
-    scoring_kind: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct File {
-    #[serde(default)]
-    name: String,
-    url: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Profile {
-    #[serde(default, deserialize_with = "de_opt_id")]
-    id: Option<String>,
-    name: String,
-    #[serde(default)]
-    solves: Vec<ProfileSolve>,
-}
-
-fn de_opt_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Ok(match Option::<Value>::deserialize(d)? {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) => Some(s),
-        Some(other) => Some(other.to_string()),
-    })
-}
-
-#[derive(Debug, Deserialize)]
-struct ProfileSolve {
-    #[serde(deserialize_with = "de_id")]
-    id: String,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    category: String,
-    #[serde(default)]
-    points: Option<i64>,
-    #[serde(default, rename = "awardedPoints")]
-    awarded_points: Option<i64>,
-    #[serde(rename = "createdAt")]
-    created_at: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct Board {
-    #[serde(default)]
-    total: Option<usize>,
-    leaderboard: Vec<BoardEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BoardEntry {
-    #[serde(deserialize_with = "de_id")]
-    id: String,
-    name: String,
-    #[serde(default)]
-    score: i64,
-    #[serde(default, rename = "globalPlace")]
-    global_place: Option<i64>,
-    /// v2 only.
-    #[serde(default)]
-    solves: Option<Vec<BoardSolve>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BoardSolve {
-    #[serde(deserialize_with = "de_id")]
-    id: String,
-    #[serde(rename = "solveTime")]
-    solve_time: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct Graph {
-    graph: Vec<GraphEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphEntry {
-    #[serde(deserialize_with = "de_id")]
-    id: String,
-    name: String,
-    #[serde(default)]
-    points: Vec<GraphPoint>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphPoint {
-    time: i64,
-    score: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct BoardChalls {
-    challenges: HashMap<String, BoardChall>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BoardChall {
-    #[serde(default)]
-    points: Option<i64>,
-}
-
-// ----------------------------------------------------------------------
-// Transport
-// ----------------------------------------------------------------------
-
-/// A parsed rCTF response, good or bad.
-struct Reply {
-    status: reqwest::StatusCode,
-    envelope: Option<Envelope>,
-    method: &'static str,
-    url: String,
-    final_url: String,
-    content_type: Option<String>,
-    body: String,
-}
-
-impl Reply {
-    async fn read(method: &'static str, url: &str, response: reqwest::Response) -> Self {
-        let status = response.status();
-        let final_url = response.url().to_string();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let body = response.text().await.unwrap_or_default();
-        Self {
-            status,
-            envelope: serde_json::from_str(&body).ok(),
-            method,
-            url: url.to_string(),
-            final_url,
-            content_type,
-            body,
-        }
-    }
-
-    fn kind(&self) -> &str {
-        self.envelope.as_ref().map_or("", |e| e.kind.as_str())
-    }
-
-    /// An unknown route: try the older API instead.
-    fn missing_route(&self) -> bool {
-        self.status == reqwest::StatusCode::NOT_FOUND
-            && (self.envelope.is_none() || self.kind() == "badEndpoint")
-    }
-
-    fn dump(&self) -> ResponseDump<'_> {
-        ResponseDump {
-            method: self.method,
-            url: &self.url,
-            final_url: &self.final_url,
-            status: self.status,
-            content_type: self.content_type.as_deref(),
-            body: &self.body,
-        }
-    }
-
-    /// The `data` of a `goodXxx` reply, or an error explaining the rest.
-    fn good(self) -> Result<Value, CtfdError> {
-        match self.envelope {
-            Some(ref e) if e.kind.starts_with("good") => {
-                Ok(self.envelope.and_then(|e| e.data).unwrap_or(Value::Null))
-            }
-            _ => Err(self.error()),
-        }
-    }
-
-    fn error(&self) -> CtfdError {
-        let dump = self.dump();
-        let Some(ref e) = self.envelope else {
-            let headline = if self.status.is_success() {
-                "Invalid or unexpected response format (not rCTF API JSON).".to_string()
-            } else {
-                format!("rCTF request failed with HTTP {}", self.status)
-            };
-            return CtfdError::Api(dump.render(&headline));
-        };
-        let message = e.message.clone().unwrap_or_else(|| e.kind.clone());
-        match e.kind.as_str() {
-            "badToken" | "badUnknownUser" | "badTokenVerification" => CtfdError::Denied {
-                kind: DenyKind::BadToken,
-                message: format!(
-                    "rCTF did not accept the team token ({message}). Copy the login link \
-                     from your rCTF profile page and run `ctfdc init` again."
-                ),
-            },
-            "badNotStarted" | "badEnded" => dump.denied(Some(&message), false),
-            "badPerms" => CtfdError::Denied {
-                kind: DenyKind::Forbidden,
-                message: dump.render(&format!("rCTF refused access: {message}")),
-            },
-            kind => CtfdError::Api(dump.render(&format!("rCTF returned {kind}: {message}"))),
-        }
-    }
-}
-
-impl CtfdClient {
-    /// The Bearer header, logging in with the team token on first use.
-    async fn rctf_bearer(&self) -> Result<String, CtfdError> {
-        let token = self
-            .rctf
-            .auth
-            .get_or_try_init(|| async { login(self).await })
-            .await?;
-        Ok(format!("Bearer {token}"))
-    }
-
-    async fn rctf_get_once(&self, path: &str, auth: bool) -> Result<Reply, CtfdError> {
-        let url = self.api_url(path);
-        let bearer = if auth {
-            Some(self.rctf_bearer().await?)
-        } else {
-            None
-        };
-        let response = self.send_get_with(&url, bearer.as_deref()).await?;
-        Ok(Reply::read("GET", &url, response).await)
-    }
-
-    /// GET the first of `paths` the server knows (v2 before v1).
-    async fn rctf_get(&self, paths: &[&str], auth: bool) -> Result<Value, CtfdError> {
-        let mut last = None;
-        for path in paths {
-            let reply = self.rctf_get_once(path, auth).await?;
-            if reply.missing_route() {
-                last = Some(reply);
-                continue;
-            }
-            return reply.good();
-        }
-        Err(last.map_or_else(
-            || CtfdError::Api("no rCTF route to try".into()),
-            |r| r.error(),
-        ))
-    }
-
-    async fn rctf_post(&self, path: &str, body: &Value, auth: bool) -> Result<Reply, CtfdError> {
-        let url = self.api_url(path);
-        let mut request = self.http.post(&url).json(body);
-        if auth {
-            request = request.header("Authorization", self.rctf_bearer().await?);
-        }
-        let response = request.send().await?;
-        Ok(Reply::read("POST", &url, response).await)
-    }
-}
-
 fn parse<T: serde::de::DeserializeOwned>(what: &str, value: Value) -> Result<T, CtfdError> {
     serde_json::from_value(value)
         .map_err(|e| CtfdError::Parse(format!("Unexpected rCTF {what} response: {e}")))
-}
-
-/// Exchange the configured token for an auth token.  The token is normally
-/// the team token from the login link; an auth token works as-is.
-async fn login(client: &CtfdClient) -> Result<String, CtfdError> {
-    let token = client.api_token.clone();
-    let url = client.api_url("/api/v1/auth/login");
-    let response = client
-        .http
-        .post(&url)
-        .json(&serde_json::json!({ "teamToken": token }))
-        .send()
-        .await?;
-    let reply = Reply::read("POST", &url, response).await;
-    if reply.kind() == "goodLogin" {
-        let data = reply.good()?;
-        return data
-            .get("authToken")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| CtfdError::Parse("rCTF login returned no authToken".into()));
-    }
-    if matches!(
-        reply.kind(),
-        "badTokenVerification" | "badUnknownUser" | "badBody"
-    ) {
-        // Maybe it already is an auth token.
-        let url = client.api_url("/api/v1/auth/test");
-        let response = client
-            .send_get_with(&url, Some(&format!("Bearer {token}")))
-            .await?;
-        if Reply::read("GET", &url, response).await.kind() == "goodToken" {
-            return Ok(token);
-        }
-    }
-    Err(reply.error())
 }
 
 /// Probe the public client config, without retrying.
@@ -425,10 +103,6 @@ pub(super) async fn detect(base_url: &str) -> bool {
     envelope.kind.starts_with("goodClientConfig")
 }
 
-// ----------------------------------------------------------------------
-// The CtfdClient methods
-// ----------------------------------------------------------------------
-
 async fn profile_me(client: &CtfdClient) -> Result<Profile, CtfdError> {
     let data = client
         .rctf_get(&["/api/v2/users/me", "/api/v1/users/me"], true)
@@ -448,11 +122,11 @@ pub(super) async fn me(client: &CtfdClient) -> Result<UserMe, CtfdError> {
     })
 }
 
-async fn challenge_list(client: &CtfdClient) -> Result<Vec<Chall>, CtfdError> {
+async fn challenge_list(client: &CtfdClient) -> Result<Vec<RctfChallenge>, CtfdError> {
     let data = client
         .rctf_get(&["/api/v2/challs", "/api/v1/challs"], true)
         .await?;
-    let list: Vec<Chall> = parse("challenge list", data)?;
+    let list: Vec<RctfChallenge> = parse("challenge list", data)?;
     for c in &list {
         remember(&client.rctf.challenge_ids, &c.id);
     }
@@ -462,7 +136,7 @@ async fn challenge_list(client: &CtfdClient) -> Result<Vec<Chall>, CtfdError> {
     Ok(list)
 }
 
-async fn cached_challenges(client: &CtfdClient) -> Result<Vec<Chall>, CtfdError> {
+async fn cached_challenges(client: &CtfdClient) -> Result<Vec<RctfChallenge>, CtfdError> {
     let cached = client.rctf.challenges.lock().ok().and_then(|c| c.clone());
     match cached {
         Some(list) => Ok(list),
@@ -479,7 +153,7 @@ pub(super) async fn challenges(client: &CtfdClient) -> Result<Vec<Challenge>, Ct
     Ok(list
         .into_iter()
         .map(|c| Challenge {
-            id: num_id(&c.id),
+            id: numeric_id(&c.id),
             solved_by_me: c.your_score.is_some() || solved.contains(&c.id),
             name: c.name,
             category: c.category,
@@ -497,7 +171,7 @@ pub(super) async fn challenge_detail(
     let list = cached_challenges(client).await?;
     let c = list
         .into_iter()
-        .find(|c| num_id(&c.id) == challenge_id)
+        .find(|c| numeric_id(&c.id) == challenge_id)
         .ok_or_else(|| CtfdError::Api(format!("rCTF has no challenge #{challenge_id}")))?;
     let mut description = c.description;
     if !c.author.is_empty() {
@@ -521,7 +195,7 @@ pub(super) async fn challenge_detail(
 
 /// rCTF names files separately from their (often hashed) URLs; keep the
 /// name as the URL's last segment so downloads are saved under it.
-fn file_url(f: &File) -> String {
+fn file_url(f: &Attachment) -> String {
     let last = f
         .url
         .split(['?', '#'])
@@ -592,10 +266,15 @@ fn urlencode(id: &str) -> String {
 }
 
 /// Leaderboard entries from the top, up to `want` (all when `None`).
-async fn board(client: &CtfdClient, want: Option<usize>) -> Result<Vec<BoardEntry>, CtfdError> {
-    let mut out: Vec<BoardEntry> = Vec::new();
-    for _ in 0..MAX_PAGES {
-        let limit = want.map_or(PAGE, |w| (w - out.len()).min(PAGE));
+async fn leaderboard_entries(
+    client: &CtfdClient,
+    want: Option<usize>,
+) -> Result<Vec<LeaderboardEntry>, CtfdError> {
+    let mut out: Vec<LeaderboardEntry> = Vec::new();
+    for _ in 0..MAX_LEADERBOARD_PAGES {
+        let limit = want.map_or(LEADERBOARD_PAGE_SIZE, |w| {
+            (w - out.len()).min(LEADERBOARD_PAGE_SIZE)
+        });
         let query = format!("limit={limit}&offset={}", out.len());
         let data = client
             .rctf_get(
@@ -606,7 +285,7 @@ async fn board(client: &CtfdClient, want: Option<usize>) -> Result<Vec<BoardEntr
                 false,
             )
             .await?;
-        let page: Board = parse("leaderboard", data)?;
+        let page: LeaderboardPage = parse("leaderboard", data)?;
         let offset = out.len();
         let got = page.leaderboard.len();
         out.extend(page.leaderboard.into_iter().enumerate().map(|(i, mut e)| {
@@ -625,13 +304,13 @@ async fn board(client: &CtfdClient, want: Option<usize>) -> Result<Vec<BoardEntr
 }
 
 pub(super) async fn leaderboard(client: &CtfdClient) -> Result<Vec<ScoreboardEntry>, CtfdError> {
-    Ok(board(client, None)
+    Ok(leaderboard_entries(client, None)
         .await?
         .into_iter()
         .enumerate()
         .map(|(i, e)| ScoreboardEntry {
             pos: e.global_place.unwrap_or(i as i64 + 1),
-            account_id: Some(num_id(&e.id)),
+            account_id: Some(numeric_id(&e.id)),
             account_type: Some("team".into()),
             name: e.name,
             score: e.score,
@@ -643,13 +322,13 @@ pub(super) async fn leaderboard(client: &CtfdClient) -> Result<Vec<ScoreboardEnt
 /// each team's solves) priced at current challenge points, else from the
 /// v1 score graph (no challenge per step).
 pub(super) async fn top(client: &CtfdClient, count: u32) -> Result<Vec<TopEntry>, CtfdError> {
-    let entries = board(client, Some(count as usize)).await?;
+    let entries = leaderboard_entries(client, Some(count as usize)).await?;
     if entries.iter().any(|e| e.solves.is_some()) {
         let points = challenge_points(client).await;
         return Ok(entries
             .into_iter()
             .map(|e| TopEntry {
-                id: Some(num_id(&e.id)),
+                id: Some(numeric_id(&e.id)),
                 name: e.name,
                 solves: e
                     .solves
@@ -658,7 +337,7 @@ pub(super) async fn top(client: &CtfdClient, count: u32) -> Result<Vec<TopEntry>
                     .map(|s| ScoreEvent {
                         challenge_id: Some(remember(&client.rctf.challenge_ids, &s.id)),
                         value: points.get(&s.id).copied().unwrap_or(0),
-                        date: iso(s.solve_time),
+                        date: timestamp_from_millis(s.solve_time),
                     })
                     .collect(),
             })
@@ -690,7 +369,7 @@ pub(super) async fn top(client: &CtfdClient, count: u32) -> Result<Vec<TopEntry>
                     (delta != 0).then(|| ScoreEvent {
                         challenge_id: None,
                         value: delta,
-                        date: iso(p.time),
+                        date: timestamp_from_millis(p.time),
                     })
                 })
                 .collect();
@@ -710,7 +389,7 @@ async fn challenge_points(client: &CtfdClient) -> HashMap<String, i64> {
     if let Ok(data) = client
         .rctf_get(&["/api/v2/leaderboard/challs"], false)
         .await
-        && let Ok(list) = parse::<BoardChalls>("leaderboard challenges", data)
+        && let Ok(list) = parse::<ChallengePoints>("leaderboard challenges", data)
     {
         return list
             .challenges
@@ -752,7 +431,7 @@ pub(super) async fn account_solves(
             let cid = remember(&client.rctf.challenge_ids, &s.id);
             AccountSolve {
                 challenge_id: Some(cid),
-                date: iso(s.created_at),
+                date: timestamp_from_millis(s.created_at),
                 challenge: Some(SolvedChallenge {
                     id: Some(cid),
                     value: s.awarded_points.or(s.points).unwrap_or(0),
@@ -770,22 +449,22 @@ mod tests {
 
     #[test]
     fn numeric_ids_are_stable() {
-        assert_eq!(num_id("42"), 42);
-        let a = num_id("baby-rev");
-        assert_eq!(a, num_id("baby-rev"));
-        assert_ne!(a, num_id("baby-pwn"));
+        assert_eq!(numeric_id("42"), 42);
+        let a = numeric_id("baby-rev");
+        assert_eq!(a, numeric_id("baby-rev"));
+        assert_ne!(a, numeric_id("baby-pwn"));
         assert!((100_000_000..1_000_000_000).contains(&a));
-        assert!(num_id("123456789012") >= 100_000_000);
+        assert!(numeric_id("123456789012") >= 100_000_000);
     }
 
     #[test]
     fn converts_milliseconds() {
-        assert_eq!(iso(60_000), "1970-01-01T00:01:00+00:00");
+        assert_eq!(timestamp_from_millis(60_000), "1970-01-01T00:01:00+00:00");
     }
 
     #[test]
     fn keeps_file_names() {
-        let f = |name: &str, url: &str| File {
+        let f = |name: &str, url: &str| Attachment {
             name: name.into(),
             url: url.into(),
         };

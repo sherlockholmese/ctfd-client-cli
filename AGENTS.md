@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Rust CLI crate that builds the `ctfdc` binary from `src/main.rs`. Core API logic lives in `src/client.rs`, data types in `src/models.rs`, configuration resolution in `src/config.rs`, filesystem helpers in `src/fs_util.rs`, and command implementations under `src/commands/`. Integration and command behavior tests are in `tests/` and use mocked CTFd API responses.
+This Rust crate builds `ctfdc` from `src/main.rs`; `src/commands/mod.rs` dispatches commands. API methods live in `src/client.rs`, with transport, response handling, and the rCTF adapter under `src/client/`. Shared API types are in `src/models.rs`. `src/config.rs` exports configuration types; `src/config/` separates CLI declarations, workspace resolution, and time parsing. Command handlers live under `src/commands/`, shared download and metadata operations under `src/workspace/`, and safe-path helpers in `src/fs_util.rs`. `src/board/` owns live data and analytics; `src/tui/`, `src/web/`, and `assets/web/` render it. Integration tests in `tests/` use mocked API responses and shared process setup in `tests/common/`. See `CONTRIBUTING.md` for the source map and request flows.
 
 ## Build, Test, and Development Commands
 

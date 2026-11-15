@@ -1,11 +1,9 @@
 //! Discoverability of the command-line interface: aliases, help, completions.
 
-use assert_cmd::Command;
-use predicates::prelude::*;
+mod common;
 
-fn ctfd() -> Command {
-    Command::cargo_bin("ctfdc").expect("ctfdc binary should exist")
-}
+use common::ctfd;
+use predicates::prelude::*;
 
 #[test]
 fn no_arguments_shows_quick_start() {
