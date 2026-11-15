@@ -30,7 +30,7 @@
     layout: "split", // board layout: split, graph, table
     seenNotice: 0, // highest notice id already shown
     target: null, // id of the Plan target whose details are shown
-    more: false, // whether the target's full details are open
+    more: true, // whether the target's stats are showing
     challenge: null, // id of the challenge open on the Challenges tab
     unsolvedOnly: false,
     asked: new Set(), // challenge ids whose details were requested
@@ -1152,20 +1152,20 @@
     ];
   }
 
-  // The full details stay closed until asked for, and stay as left.
+  // The stats show unless hidden, and stay as left.
   function setMore(open) {
     state.more = open;
     try {
-      localStorage.setItem("ctfdc-more", open ? "1" : "");
+      localStorage.setItem("ctfdc-stats", open ? "1" : "0");
     } catch {
       /* private mode: the choice lasts for this page only */
     }
     if (state.snap) renderPlan();
   }
   try {
-    state.more = localStorage.getItem("ctfdc-more") === "1";
+    state.more = localStorage.getItem("ctfdc-stats") !== "0";
   } catch {
-    /* stays closed */
+    /* stays open */
   }
   $("more").addEventListener("click", () => setMore(!state.more));
 
@@ -1363,7 +1363,7 @@
       replace($("viz-more"), drawStats(picked));
       $("viz-more").hidden = !state.more;
       $("more").setAttribute("aria-expanded", state.more);
-      $("more").textContent = state.more ? "Less" : "More";
+      $("more").setAttribute("aria-label", state.more ? "Hide stats" : "Show stats");
       replace($("facts"), picked.facts.map((f) => el("div", null, el("dt", { text: f.label }), el("dd", { text: f.value }))));
     }
     $("targets-empty").hidden = targets.length > 0;

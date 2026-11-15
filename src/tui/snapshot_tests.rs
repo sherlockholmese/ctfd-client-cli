@@ -362,12 +362,9 @@ fn plan_ranks_targets_and_the_climb() {
         app.on_key(key(KeyCode::Char('s')));
     }
     assert_eq!(app.board.plan.sort, Sort::Likely);
-    // The rest of what is known stays out of the way until `i` asks.
-    let t = text(&draw(&mut app, 160, 44));
-    assert!(!t.contains("Solved by") && !t.contains("Your odds"), "{t}");
-    app.on_key(key(KeyCode::Char('i')));
+    // The highlighted target's stats show under the list; `i` hides them.
     let buf = draw(&mut app, 160, 44);
-    export("plan-more-160x44", &buf);
+    export("plan-160x44", &buf);
     let t = text(&buf);
     for needle in [
         "Solved by",
@@ -380,7 +377,11 @@ fn plan_ranks_targets_and_the_climb() {
         assert!(t.contains(needle), "missing {needle:?}\n{t}");
     }
     app.on_key(key(KeyCode::Char('i')));
-    assert!(!text(&draw(&mut app, 160, 44)).contains("Solved by"));
+    let t = text(&draw(&mut app, 160, 44));
+    assert!(!t.contains("Solved by") && !t.contains("Your odds"), "{t}");
+    assert!(t.contains("Rival has it"), "the title line stays");
+    app.on_key(key(KeyCode::Char('i')));
+    assert!(text(&draw(&mut app, 160, 44)).contains("Solved by"));
 
     let plan = &app.board.plan;
 

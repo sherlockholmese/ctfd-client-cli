@@ -692,11 +692,16 @@ th[aria-sort="ascending"] .sort::after { content: " ↑"; }
   display: grid; gap: 8px;
 }
 .signals:has(.viz-more:not([hidden])) { padding-bottom: 16px; }
+/* The target and what it is on the left, what you can do with it on the
+   right. */
 .signals-head { gap: 12px; }
 .signals-head .level { margin-left: 4px; }
+.signals-head .spacer { flex: 1; }
+#more .icon { transition: rotate var(--fast) ease; }
+#more[aria-expanded="false"] .icon { rotate: -90deg; }
 .viz-more { padding-top: 4px; }
 .viz-more[hidden] { display: none; }
-.signals-head .card-title { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.signals-head .card-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .btn[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 /* Four blocks of a heading over up to three lines: the
    arrangement the terminal uses too. */

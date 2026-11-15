@@ -334,7 +334,10 @@
               <h3 class="card-title" id="signals-title"></h3>
               <span class="level" id="signals-level"></span>
               <span class="why" id="signals-why"></span>
-              <button class="btn btn-ghost btn-sm" id="more" type="button" aria-expanded="false" aria-controls="viz-more" title="Solve share, odds, time and who solved it (I)">More</button>
+              <span class="spacer"></span>
+              <button class="btn btn-ghost btn-sm btn-icon" id="more" type="button" aria-expanded="true" aria-controls="viz-more" aria-label="Hide stats" title="Stats (I)">
+                <svg class="icon"><use href="#i-down"/></svg>
+              </button>
               <button class="btn btn-ghost btn-sm" id="open-one" type="button" title="Read it and submit its flag (O)">Open</button>
               <button class="btn btn-outline btn-sm" id="download-one" type="button" title="Download this challenge's files (D)">
                 <svg class="icon"><use href="#i-download"/></svg>
@@ -342,7 +345,7 @@
               </button>
             </header>
             <!-- The drawings; the list after them says the same in words. -->
-            <div class="viz viz-more" id="viz-more" aria-hidden="true" hidden></div>
+            <div class="viz viz-more" id="viz-more" aria-hidden="true"></div>
             <dl class="sr-only" id="facts"></dl>
           </section>
         </article>
@@ -427,7 +430,7 @@
       <div><dt><kbd>M</kbd></dt><dd>Jump to you (Board), rival above you (Analysis), default goal (Plan)</dd></div>
       <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Rival one place up or down (Analysis), goal one place up or down (Plan)</dd></div>
       <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick a target or a challenge (Plan, Challenges)</dd></div>
-      <div><dt><kbd>I</kbd></dt><dd>More or less about the picked target (Plan)</dd></div>
+      <div><dt><kbd>I</kbd></dt><dd>Show or hide the picked target's stats (Plan)</dd></div>
       <div><dt><kbd>S</kbd></dt><dd>Order targets: likely points, per hour, odds, points, time (Plan)</dd></div>
       <div><dt><kbd>T</kbd></dt><dd>Graph range: all, 24h to 30m</dd></div>
       <div><dt><kbd>L</kbd></dt><dd>Board layout: split, graph, table</dd></div>

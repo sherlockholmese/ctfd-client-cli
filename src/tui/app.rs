@@ -71,7 +71,7 @@ pub struct App {
     pub board_state: TableState,
     pub catch_state: TableState,
     pub plan_state: TableState,
-    /// Show the highlighted target's full details, not just its timeline.
+    /// Show the highlighted target's stats under the list.
     pub more: bool,
     pub chal_state: TableState,
     /// Hide the challenges you have solved.
@@ -98,7 +98,7 @@ impl App {
             board_state: TableState::default(),
             catch_state: TableState::default().with_selected(Some(0)),
             plan_state: TableState::default().with_selected(Some(0)),
-            more: false,
+            more: true,
             chal_state: TableState::default().with_selected(Some(0)),
             unsolved_only: false,
             flag_input: None,

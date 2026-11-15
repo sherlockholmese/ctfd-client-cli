@@ -284,7 +284,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("<-/->", "goal"),
                 ("↑/↓", "targets"),
                 ("s", "order"),
-                ("i", "more"),
+                ("i", "stats"),
                 ("o", "open"),
                 ("d", "download"),
                 ("D", "all"),
@@ -320,7 +320,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("<-/->, h/l", "Rival one place up / down (Analysis)"),
         ("", "Goal one place up / down (Plan)"),
         ("a", "Analyse the selected team"),
-        ("i", "More or less about the highlighted target (Plan)"),
+        ("i", "Show or hide the highlighted target's stats (Plan)"),
         ("o", "Open the highlighted target in Challenges (Plan)"),
         ("f, Enter", "Submit a flag for the challenge (Challenges)"),
         ("u", "Only challenges left to solve (Challenges)"),
@@ -1454,7 +1454,7 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
         render_ladder(f, ladder, app);
         render_focus(f, focus, app);
         // The list, then everything known about the highlighted target.
-        // One line unless more was asked for with `i`.
+        // The target's stats under the list, unless hidden with `i`.
         let facts_h = if app.more { FACT_ROWS } else { 1 }.min(main.height / 2);
         let [list, _, facts] = Layout::vertical([
             Constraint::Min(0),
@@ -1712,8 +1712,8 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
         title,
     );
 
-    // The rest only when asked for: four blocks side by side, each a
-    // quiet heading over three lines.
+    // Its stats, unless hidden: four blocks side by side, each a quiet
+    // heading over up to three lines.
     if !app.more {
         return;
     }
