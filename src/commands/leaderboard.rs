@@ -504,58 +504,44 @@ fn drawn(standings: &Standings, color: bool, width: usize) -> String {
         );
     }
 
-    // Where you stand, in a sentence.
+    // Where you stand, as figures: your place, then the gaps around you.
     out.push('\n');
     if let Some(me) = standings.me {
         let e = &entries[me];
-        let _ = writeln!(
-            out,
-            "  You are {} of {} with {} points.",
+        let mut parts = vec![
             paint(YOU, &format!("#{}", e.pos)),
-            grouped(entries.len() as i64),
-            paint(BOLD, &grouped(e.score))
-        );
-        let mut gaps = Vec::new();
+            format!("{} pts", paint(BOLD, &grouped(e.score))),
+        ];
         if let Some(above) = me.checked_sub(1).map(|j| &entries[j]) {
-            gaps.push(format!(
-                "{} behind #{} {}",
-                paint(BAD, &grouped(above.score - e.score)),
-                above.pos,
-                fit(&above.name, 28)
+            parts.push(format!(
+                "{} to #{}",
+                paint(BAD, &format!("-{}", grouped(above.score - e.score))),
+                above.pos
             ));
         }
         if let Some(below) = entries.get(me + 1) {
-            gaps.push(format!(
-                "{} ahead of #{} {}",
-                paint(GOOD, &grouped(e.score - below.score)),
-                below.pos,
-                fit(&below.name, 28)
+            parts.push(format!(
+                "{} on #{}",
+                paint(GOOD, &format!("+{}", grouped(e.score - below.score))),
+                below.pos
             ));
         }
-        if !gaps.is_empty() {
-            let _ = writeln!(out, "  {}.", gaps.join(", "));
-        }
         if let Some(n) = standings.cutoff.map(|n| n as usize).filter(|&n| n >= 1) {
-            let margin = if me < n {
-                entries.get(n).map(|out_| {
-                    format!(
-                        "  Qualifying by {}.",
-                        paint(GOOD, &grouped(e.score - out_.score))
-                    )
-                })
-            } else {
-                entries.get(n - 1).map(|in_| {
-                    format!(
-                        "  {} short of the top {n}.",
-                        paint(BAD, &grouped(in_.score - e.score))
-                    )
-                })
-            };
-            if let Some(margin) = margin {
-                let _ = writeln!(out, "{margin}");
+            if me < n {
+                if let Some(first_out) = entries.get(n) {
+                    parts.push(format!(
+                        "{} inside top {n}",
+                        paint(GOOD, &format!("+{}", grouped(e.score - first_out.score)))
+                    ));
+                }
+            } else if let Some(last_in) = entries.get(n - 1) {
+                parts.push(format!(
+                    "{} to top {n}",
+                    paint(BAD, &format!("-{}", grouped(last_in.score - e.score)))
+                ));
             }
         }
-        out.push('\n');
+        let _ = writeln!(out, "  {}\n", parts.join("   "));
     }
     out
 }
@@ -630,9 +616,7 @@ mod tests {
             "Delta  you",
             "12,500",
             "tied",
-            "You are #4 of 5 with 4,000 points.",
-            "5,000 behind #3 Charlie, 2,750 ahead of #5 Echo.",
-            "5,000 short of the top 2.",
+            "#4   4,000 pts   -5,000 to #3   +2,750 on #5   -5,000 to top 2",
         ] {
             assert!(text.contains(needle), "missing {needle:?}\n{text}");
         }

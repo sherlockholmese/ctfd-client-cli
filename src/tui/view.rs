@@ -284,6 +284,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ("<-/->", "goal"),
                 ("↑/↓", "targets"),
                 ("s", "order"),
+                ("i", "stats"),
                 ("o", "open"),
                 ("d", "download"),
                 ("D", "all"),
@@ -303,7 +304,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     const KEY_W: usize = 15;
-    let rows: [(&str, &str); 27] = [
+    let rows: [(&str, &str); 28] = [
         ("Tab, 1, 2, 3, 4", "Board / Analysis / Plan / Challenges"),
         ("↑/↓, j/k", "Move selection or target list"),
         ("PgUp/PgDn", "Move ten rows"),
@@ -319,6 +320,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("<-/->, h/l", "Rival one place up / down (Analysis)"),
         ("", "Goal one place up / down (Plan)"),
         ("a", "Analyse the selected team"),
+        ("i", "Show or hide the highlighted target's stats (Plan)"),
         ("o", "Open the highlighted target in Challenges (Plan)"),
         ("f, Enter", "Submit a flag for the challenge (Challenges)"),
         ("u", "Only challenges left to solve (Challenges)"),
@@ -1433,18 +1435,14 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
             .iter()
             .map(|t| fit(&t.stat.name, 64).chars().count()),
     );
-    // Step, Pts, Odds, Time, Per hour, Level, Category, Challenge; the
-    // "Why" column takes what is left, up to its full width.
+    // Step, Pts, Odds, Time, Category, Challenge.
     let name_w = name_w.max(22);
-    let least_w = 2 + 6 + 5 + 8 + 5 + 7 + 11 + name_w + 2 * 8 + 2;
-    let main_w = least_w + WHY_WIDTH;
-    // The ladder, a blank line, and the two lines on pace.
-    let ladder_h = app.board.plan.ladder.len() as u16 + 4 + 4;
+    let least_w = 2 + 6 + 5 + 8 + 11 + name_w + 2 * 5 + 2;
+    let ladder_h = app.board.plan.ladder.len() as u16 + 4;
     if area.width >= least_w + PLAN_SIDE + PANEL_GAP {
         // The rail first, as on the Analysis tab: pick, then act.
         let [side, main] =
-            Layout::horizontal([Constraint::Length(PLAN_SIDE), Constraint::Max(main_w)])
-                .flex(ratatui::layout::Flex::SpaceBetween)
+            Layout::horizontal([Constraint::Length(PLAN_SIDE), Constraint::Min(least_w)])
                 .spacing(PANEL_GAP)
                 .areas(rest);
         let [ladder, _, focus] = Layout::vertical([
@@ -1456,7 +1454,8 @@ fn render_plan(f: &mut Frame, area: Rect, app: &mut App) {
         render_ladder(f, ladder, app);
         render_focus(f, focus, app);
         // The list, then everything known about the highlighted target.
-        let facts_h = FACT_ROWS.min(main.height / 2);
+        // The target's stats under the list, unless hidden with `i`.
+        let facts_h = if app.more { FACT_ROWS } else { 1 }.min(main.height / 2);
         let [list, _, facts] = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(1),
@@ -1484,11 +1483,9 @@ fn solved_in(at: Option<i64>, start: i64) -> String {
 }
 
 /// Width of the Plan rail: the ladder with its marker.
-const PLAN_SIDE: u16 = 58;
+const PLAN_SIDE: u16 = 46;
 /// Lines given to the highlighted target's details.
-const FACT_ROWS: u16 = 7;
-/// Width of the "Why" column.
-const WHY_WIDTH: u16 = 19;
+const FACT_ROWS: u16 = 6;
 
 /// Chance as a whole percentage; anything under half a percent is "<1%".
 fn percent(odds: f64) -> String {
@@ -1538,14 +1535,7 @@ fn render_plan_verdict(f: &mut Frame, area: Rect, app: &App) {
                         theme::heading().add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(format!("   +{}", pts(gain)), theme::positive()),
-                    Span::styled(
-                        format!(
-                            "   {} chance of landing {}",
-                            percent(odds),
-                            if n == 1 { "it" } else { "all" }
-                        ),
-                        theme::muted(),
-                    ),
+                    Span::styled(format!("   {} odds", percent(odds)), theme::muted()),
                 ],
                 _ => vec![Span::styled(
                     format!("Not enough open points to {aim}"),
@@ -1599,29 +1589,11 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
                 Some(secs) => right(crate::board::analysis::span_text(secs)),
                 None => right("-").style(theme::muted()),
             }),
-            Cell::from(right(
-                t.per_hour
-                    .map(|r| pts(r.round() as i64))
-                    .unwrap_or_else(|| "-".into()),
-            )),
-            // An organiser's tag reads plainly, an estimate quietly.
-            Cell::from(Span::styled(
-                t.difficulty.level.label(),
-                if t.difficulty.tagged {
-                    theme::text()
-                } else {
-                    theme::muted()
-                },
-            )),
             Cell::from(Span::styled(
                 fit(&t.stat.category, 11),
                 theme::category(&t.stat.category),
             )),
             Cell::from(fit(&t.stat.name, name_w as usize)),
-            Cell::from(Span::styled(
-                fit(&t.why().unwrap_or_default(), WHY_WIDTH as usize),
-                theme::muted(),
-            )),
         ])
     };
     for (i, t) in route.iter().chain(rest.iter()).enumerate() {
@@ -1633,11 +1605,11 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             && let Some(g) = plan.goal_rung()
         {
             let label = if app.board.cutoff.is_some_and(|n| i64::from(n) == g.pos) {
-                format!("↑ top {}, past {}", g.pos, fit(&g.name, 18))
+                format!("↑ top {}", g.pos)
             } else {
-                format!("↑ passes #{} {}", g.pos, fit(&g.name, 18))
+                format!("↑ passes #{}", g.pos)
             };
-            rows.push(rule_row(label, 9, 7));
+            rows.push(rule_row(label, 6, 5));
         }
     }
     // The column the list is ordered by carries an arrow.
@@ -1655,11 +1627,13 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             Cell::from(right(sorted("Pts", Sort::Points))),
             Cell::from(right(sorted("Odds", Sort::Odds))),
             Cell::from(right(sorted("Time", Sort::Time))),
-            Cell::from(right(sorted("/h", Sort::PerHour))),
-            Cell::from("Level"),
             Cell::from("Category"),
-            Cell::from("Challenge"),
-            Cell::from("Why"),
+            // An order with no column of its own is named here.
+            Cell::from(if sort == Sort::PerHour {
+                "Challenge, by points per hour"
+            } else {
+                "Challenge"
+            }),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -1670,11 +1644,8 @@ fn render_targets(f: &mut Frame, area: Rect, app: &mut App, name_w: u16) {
             Constraint::Length(6),
             Constraint::Length(5),
             Constraint::Length(8),
-            Constraint::Length(5),
-            Constraint::Length(7),
             Constraint::Length(11),
-            Constraint::Length(name_w),
-            Constraint::Max(WHY_WIDTH),
+            Constraint::Min(name_w),
         ],
     )
     .header(header)
@@ -1716,10 +1687,8 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
     let Some((field, start, ahead_tracked)) = plan.context() else {
         return;
     };
-    let now = app.board.now;
     let quiet = |text: String| Span::styled(text, theme::muted());
-    let [title, timeline, _, blocks] = Layout::vertical([
-        Constraint::Length(1),
+    let [title, _, blocks] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
@@ -1736,58 +1705,18 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
                 "■".repeat(level + 1),
                 "□".repeat(3 - level)
             )),
-            quiet(format!(
-                "{}{}",
-                t.difficulty.level.label(),
-                if t.difficulty.tagged {
-                    ""
-                } else {
-                    ", estimated"
-                }
-            )),
+            quiet(t.difficulty.level.label().to_string()),
+            quiet(t.why().map(|why| format!("   {why}")).unwrap_or_default()),
         ])
         .centered(),
         title,
     );
 
-    // Solves over the CTF: a mark per tracked solve from the start to now,
-    // the last hour drawn dotted.
-    // The words beside the track need about 62 cells.
-    let track = (area.width as usize).saturating_sub(62).clamp(12, 44);
-    let elapsed = (now - start).max(1) as f64;
-    let mut cells: Vec<char> = (0..track)
-        .map(|i| {
-            if (i as f64 + 0.5) / track as f64 >= 1.0 - 3600.0 / elapsed {
-                '┄'
-            } else {
-                '─'
-            }
-        })
-        .collect();
-    for &at in &t.timing.times {
-        cells[cell_at((at - start) as f64 / elapsed, track)] = '●';
+    // Its stats, unless hidden: four blocks side by side, each a quiet
+    // heading over up to three lines.
+    if !app.more {
+        return;
     }
-    let summary = match (t.timing.first(), t.timing.last()) {
-        (Some(first), Some(last)) => format!(
-            "   {} solves   first {} in   latest {} ago",
-            t.timing.times.len(),
-            span_text(first - start),
-            span_text(now - last)
-        ),
-        _ => "   no tracked team has solved it".into(),
-    };
-    f.render_widget(
-        Line::from(vec![
-            quiet("start ".into()),
-            Span::raw(cells.into_iter().collect::<String>()),
-            quiet(" now".into()),
-            quiet(summary),
-        ])
-        .centered(),
-        timeline,
-    );
-
-    // Four blocks side by side, each a quiet heading over three lines.
     const BAR: usize = 10;
     let block = |heading: &str, rows: Vec<Line<'static>>| {
         let mut lines = vec![Line::styled(heading.to_string(), theme::muted())];
@@ -1836,7 +1765,6 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
         *cell = '▒';
     }
     cells[cell_at(t.odds, ODDS)] = '█';
-    let (mine, total) = t.category_record;
     f.render_widget(
         block(
             "Your odds",
@@ -1845,16 +1773,7 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
                     Span::raw(cells.into_iter().collect::<String>()),
                     Span::raw(format!(" {}", percent(t.odds))),
                 ]),
-                Line::from(quiet(format!(
-                    "likely {} to {}",
-                    percent(low),
-                    percent(high)
-                ))),
-                Line::from(quiet(format!(
-                    "{}: you {mine}/{total}, field {}",
-                    fit(&t.stat.category, 8),
-                    percent(t.category_share)
-                ))),
+                Line::from(quiet(format!("{} to {}", percent(low), percent(high)))),
             ],
         ),
         odds_area,
@@ -1880,7 +1799,7 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
                 }
             }
             cells[at(median)] = '┃';
-            typical = format!("typically {}", span_text(median));
+            typical = span_text(median);
         }
         let mut arrow = vec![' '; TIME];
         arrow[at(you)] = '▲';
@@ -1895,11 +1814,11 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
             )),
         ]));
     } else {
-        time_rows.push(Line::from(quiet("no solve times yet".into())));
+        time_rows.push(Line::from(quiet("-".into())));
     }
     f.render_widget(block("Time taken", time_rows), time_area);
 
-    // Who solved it how far in: the names the timeline cannot carry.
+    // Who solved it, and how far into the CTF.
     if who && !t.timing.times.is_empty() {
         const SHOWN: usize = 3;
         let count = t.timing.times.len();
@@ -1918,7 +1837,7 @@ fn render_facts(f: &mut Frame, area: Rect, app: &App) {
             })
             .collect();
         if count > named {
-            rows.push(Line::from(quiet(format!("and {} more", count - named))));
+            rows.push(Line::from(quiet(format!("+{}", count - named))));
         }
         f.render_widget(block("Solved at", rows), who_area);
     }
@@ -1931,66 +1850,41 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let plan = &app.board.plan;
-    let rung = |pos: i64, name: &str, cells: [Cell<'static>; 4]| {
-        let [gap, hour, pass, odds] = cells;
+    let rung = |pos: i64, name: &str, gap: Cell<'static>, pass: Cell<'static>| {
         Row::new(vec![
             Cell::from(right(format!("#{pos}"))),
-            Cell::from(fit(name, 16)),
+            Cell::from(fit(name, 18)),
             gap,
-            hour,
             pass,
-            odds,
         ])
     };
-    // Your row carries your pace, to read against theirs.
-    let pace_cell = |pace: Option<f64>| {
-        Cell::from(right(
-            pace.map(|p| pts(p.round() as i64)).unwrap_or_default(),
-        ))
-        .style(theme::muted())
-    };
-    let blank = || {
-        [
-            Cell::from(""),
-            pace_cell(plan.my_pace),
-            Cell::from(""),
-            Cell::from(""),
-        ]
-    };
+    let you = || rung(me.pos, &me.name, Cell::from(""), Cell::from("")).style(theme::you());
     let mut rows: Vec<Row> = Vec::new();
     let mut goal_row = None;
     let mut me_shown = false;
     for r in &plan.ladder {
         if !me_shown && r.pos > me.pos {
-            rows.push(rung(me.pos, &me.name, blank()).style(theme::you()));
+            rows.push(you());
             me_shown = true;
         }
         if Some(r.pos) == plan.goal {
             goal_row = Some(rows.len());
         }
         let gap = -r.ahead;
-        let hour = pace_cell(r.pace);
-        let (pass, odds) = match (r.to_pass, r.route_odds) {
-            (Some((n, _)), Some(odds)) => (
-                Cell::from(right(solves(n))),
-                Cell::from(right(percent(odds)).style(theme::muted())),
-            ),
-            _ if r.ahead < 0 => (Cell::from(""), Cell::from("")),
-            _ => (Cell::from(right("-").style(theme::muted())), Cell::from("")),
+        let pass = match r.to_pass {
+            Some((n, _)) => Cell::from(right(solves(n))),
+            None if r.ahead < 0 => Cell::from(""),
+            None => Cell::from(right("-").style(theme::muted())),
         };
         rows.push(rung(
             r.pos,
             &r.name,
-            [
-                Cell::from(right(signed_pts(gap)).style(theme::signed(gap))),
-                hour,
-                pass,
-                odds,
-            ],
+            Cell::from(right(signed_pts(gap)).style(theme::signed(gap))),
+            pass,
         ));
     }
     if !me_shown {
-        rows.push(rung(me.pos, &me.name, blank()).style(theme::you()));
+        rows.push(you());
     }
     let header = header_row(
         vec![
@@ -2000,9 +1894,7 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
                 crate::board::model::AccountKind::Users => "Player",
             }),
             Cell::from(right("Gap")),
-            Cell::from(right("Pace")),
             Cell::from(right("To pass")),
-            Cell::from(right("Odds")),
         ],
         f.area().height >= AIRY_HEIGHT,
     );
@@ -2010,11 +1902,9 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Length(4),
-            Constraint::Length(16),
+            Constraint::Length(18),
             Constraint::Length(7),
-            Constraint::Length(6),
             Constraint::Length(8),
-            Constraint::Length(5),
         ],
     )
     .header(header)
@@ -2022,22 +1912,8 @@ fn render_ladder(f: &mut Frame, area: Rect, app: &App) {
     .row_highlight_style(theme::selected())
     .highlight_symbol(Line::styled("▶", theme::accent()))
     .highlight_spacing(HighlightSpacing::Always);
-    let rows_h = (plan.ladder.len() as u16 + 3).min(inner.height);
-    let [table_area, _, note_area] = Layout::vertical([
-        Constraint::Length(rows_h),
-        Constraint::Length(1),
-        Constraint::Min(0),
-    ])
-    .areas(inner);
     let mut state = TableState::default().with_selected(goal_row);
-    f.render_stateful_widget(table, table_area, &mut state);
-    // How often you solve, and whether you are closing on the goal.
-    let note_area = Rect {
-        x: note_area.x + 2,
-        width: note_area.width.saturating_sub(2),
-        ..note_area
-    };
-    note(f, note_area, plan.pace_note());
+    f.render_stateful_widget(table, inner, &mut state);
 }
 
 fn render_focus(f: &mut Frame, area: Rect, app: &App) {
@@ -2056,9 +1932,7 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
                     fit(&c.category, 14),
                     theme::category(&c.category),
                 )),
-                Cell::from(right(format!("{}/{}", c.mine, c.total)).style(theme::muted())),
                 Cell::from(right(c.open.to_string())),
-                Cell::from(right(pts(c.points)).style(theme::points())),
                 Cell::from(right(pts(c.expected.round() as i64))),
             ])
         })
@@ -2066,9 +1940,7 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
     let header = header_row(
         vec![
             Cell::from("Category"),
-            Cell::from(right("Solved")),
             Cell::from(right("Open")),
-            Cell::from(right("Pts")),
             Cell::from(right("Likely")),
         ],
         f.area().height >= AIRY_HEIGHT,
@@ -2077,9 +1949,7 @@ fn render_focus(f: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Min(10),
-            Constraint::Length(6),
             Constraint::Length(5),
-            Constraint::Length(7),
             Constraint::Length(6),
         ],
     )

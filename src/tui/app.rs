@@ -71,6 +71,8 @@ pub struct App {
     pub board_state: TableState,
     pub catch_state: TableState,
     pub plan_state: TableState,
+    /// Show the highlighted target's stats under the list.
+    pub more: bool,
     pub chal_state: TableState,
     /// Hide the challenges you have solved.
     pub unsolved_only: bool,
@@ -96,6 +98,7 @@ impl App {
             board_state: TableState::default(),
             catch_state: TableState::default().with_selected(Some(0)),
             plan_state: TableState::default().with_selected(Some(0)),
+            more: true,
             chal_state: TableState::default().with_selected(Some(0)),
             unsolved_only: false,
             flag_input: None,
@@ -383,6 +386,7 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.board.step_goal(-1),
             KeyCode::Right | KeyCode::Char('l') => self.board.step_goal(1),
             KeyCode::Char('m') => self.board.reset_goal(),
+            KeyCode::Char('i') => self.more = !self.more,
             KeyCode::Char('s') => {
                 use crate::board::analysis::Sort;
                 let i = Sort::ALL

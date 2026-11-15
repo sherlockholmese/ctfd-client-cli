@@ -331,9 +331,6 @@ pub struct Plan {
     pub sort: analysis::Sort,
     /// Your points per hour over the last three hours.
     pub my_pace: Option<f64>,
-    /// Seconds between your solves, typically, and the tracked field's.
-    pub my_typical: Option<i64>,
-    pub field_typical: Option<i64>,
     /// When scoring began (Unix time).
     pub start: i64,
     /// Accounts above you whose solves are known.
@@ -383,39 +380,6 @@ impl Plan {
             .collect();
         rest.sort_by(|a, b| self.sort.compare(a, b));
         rest
-    }
-
-    /// How often you solve against the tracked field, and whether you
-    /// are closing on the goal, in a sentence or two.
-    pub fn pace_note(&self) -> String {
-        let mut note = Vec::new();
-        match (self.my_typical, self.field_typical) {
-            (Some(mine), Some(field)) => note.push(format!(
-                "You solve about every {}, the teams tracked every {}.",
-                analysis::span_text(mine),
-                analysis::span_text(field)
-            )),
-            (None, Some(field)) => note.push(format!(
-                "The teams tracked solve about every {}.",
-                analysis::span_text(field)
-            )),
-            _ => {}
-        }
-        if let (Some(goal), Some(_)) = (self.goal_rung(), self.my_pace) {
-            match (goal.catch_in, goal.pace) {
-                (Some(secs), _) => note.push(format!(
-                    "Level with #{} in about {} at the last 3 hours' pace.",
-                    goal.pos,
-                    analysis::span_text(secs)
-                )),
-                (None, Some(_)) => note.push(format!(
-                    "#{} has scored at least as fast as you over the last 3 hours.",
-                    goal.pos
-                )),
-                _ => {}
-            }
-        }
-        note.join(" ")
     }
 
     /// The route, then the rest: the order the views list targets in.
@@ -1445,8 +1409,6 @@ impl BoardModel {
             goal,
             sort: self.plan_sort,
             my_pace,
-            my_typical: times.my_typical,
-            field_typical: times.field_typical,
             start,
             ahead_tracked: above.len(),
             field: Some(field),

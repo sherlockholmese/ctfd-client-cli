@@ -206,9 +206,6 @@ pub struct Plan {
     pub sort: &'static str,
     /// Your points per hour over the last three hours.
     pub my_pace: Option<f64>,
-    /// How often you solve against the field, and whether you are
-    /// closing on the goal, in words.
-    pub pace_note: String,
     /// The orders the targets can be put in: key and name.
     pub sorts: Vec<(&'static str, &'static str)>,
 }
@@ -578,7 +575,6 @@ impl Snapshot {
             goal: p.goal,
             sort: p.sort.key(),
             my_pace: p.my_pace,
-            pace_note: p.pace_note(),
             sorts: analysis::Sort::ALL
                 .iter()
                 .map(|s| (s.key(), s.label()))

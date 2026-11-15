@@ -284,12 +284,10 @@
           <div class="ladder">
             <div class="rung rung-head" aria-hidden="true">
               <span></span><span class="num">#</span><span id="th-ladder-name">Team</span>
-              <span class="num">Gap</span><span class="num" title="Points per hour over the last 3 hours">Pace</span>
+              <span class="num">Gap</span>
               <span class="num" title="Solves on the likeliest route past them">To pass</span>
-              <span class="num" title="Chance of landing every solve on that route">Odds</span>
             </div>
             <div id="ladder" role="radiogroup" aria-labelledby="aim-title"></div>
-            <p class="rail-note" id="pace-note"></p>
           </div>
 
           <div class="focus">
@@ -299,9 +297,7 @@
                 <thead>
                   <tr>
                     <th scope="col">Category</th>
-                    <th class="num" scope="col" title="Challenges of the category you have solved">Solved</th>
                     <th class="num" scope="col">Open</th>
-                    <th class="num hide-sm" scope="col">Points</th>
                     <th class="num" scope="col" title="Open points weighted by your odds">Likely</th>
                   </tr>
                 </thead>
@@ -323,12 +319,9 @@
                 <tr>
                   <th scope="col"><button class="sort" type="button" data-sort="likely" title="Order by likely points">Best targets</button></th>
                   <th scope="col" class="hide-sm col-cat">Category</th>
-                  <th scope="col" class="col-diff" title="The organisers' tag when there is one, else estimated from solves and points">Difficulty</th>
                   <th class="num" scope="col"><button class="sort" type="button" data-sort="points">Points</button></th>
                   <th class="num" scope="col" title="Your estimated chance: the share of teams that solved it, weighed against its difficulty and how you do in its category"><button class="sort" type="button" data-sort="odds">Odds</button></th>
                   <th class="num col-time" scope="col" title="How long it should take you: what it took the teams that solved it, at your pace"><button class="sort" type="button" data-sort="time">Time</button></th>
-                  <th class="num col-rate" scope="col" title="Likely points per hour of that time"><button class="sort" type="button" data-sort="per_hour">Per hour</button></th>
-                  <th scope="col" class="hide-sm col-why">Why</th>
                 </tr>
               </thead>
               <tbody id="targets-body"></tbody>
@@ -340,6 +333,11 @@
             <header class="row signals-head">
               <h3 class="card-title" id="signals-title"></h3>
               <span class="level" id="signals-level"></span>
+              <span class="why" id="signals-why"></span>
+              <span class="spacer"></span>
+              <button class="btn btn-ghost btn-sm btn-icon" id="more" type="button" aria-expanded="true" aria-controls="viz-more" aria-label="Hide stats" title="Stats (I)">
+                <svg class="icon"><use href="#i-down"/></svg>
+              </button>
               <button class="btn btn-ghost btn-sm" id="open-one" type="button" title="Read it and submit its flag (O)">Open</button>
               <button class="btn btn-outline btn-sm" id="download-one" type="button" title="Download this challenge's files (D)">
                 <svg class="icon"><use href="#i-download"/></svg>
@@ -347,7 +345,7 @@
               </button>
             </header>
             <!-- The drawings; the list after them says the same in words. -->
-            <div class="viz" id="viz" aria-hidden="true"></div>
+            <div class="viz viz-more" id="viz-more" aria-hidden="true"></div>
             <dl class="sr-only" id="facts"></dl>
           </section>
         </article>
@@ -432,6 +430,7 @@
       <div><dt><kbd>M</kbd></dt><dd>Jump to you (Board), rival above you (Analysis), default goal (Plan)</dd></div>
       <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Rival one place up or down (Analysis), goal one place up or down (Plan)</dd></div>
       <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick a target or a challenge (Plan, Challenges)</dd></div>
+      <div><dt><kbd>I</kbd></dt><dd>Show or hide the picked target's stats (Plan)</dd></div>
       <div><dt><kbd>S</kbd></dt><dd>Order targets: likely points, per hour, odds, points, time (Plan)</dd></div>
       <div><dt><kbd>T</kbd></dt><dd>Graph range: all, 24h to 30m</dd></div>
       <div><dt><kbd>L</kbd></dt><dd>Board layout: split, graph, table</dd></div>
